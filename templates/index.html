@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Copy Tool</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎬 Video Copy Tool</h1>
+            <p class="subtitle">Video-Link einfügen → Analyse → Transkription → Szenen → Fertiges Video</p>
+        </header>
+
+        <!-- Progress Steps -->
+        <div class="progress-bar">
+            <div class="step active" data-step="1">
+                <div class="step-circle">1</div>
+                <span>Download</span>
+            </div>
+            <div class="step-line"></div>
+            <div class="step" data-step="2">
+                <div class="step-circle">2</div>
+                <span>Transkription</span>
+            </div>
+            <div class="step-line"></div>
+            <div class="step" data-step="3">
+                <div class="step-circle">3</div>
+                <span>Szenen</span>
+            </div>
+            <div class="step-line"></div>
+            <div class="step" data-step="4">
+                <div class="step-circle">4</div>
+                <span>Rekonstruktion</span>
+            </div>
+        </div>
+
+        <!-- Step 1: URL Input -->
+        <section id="step-1" class="card">
+            <h2>Schritt 1: Video-Link einfügen</h2>
+            <p>Unterstützt YouTube, TikTok und viele weitere Plattformen.</p>
+            <div class="input-group">
+                <input type="text" id="video-url" placeholder="https://www.youtube.com/watch?v=... oder TikTok-Link">
+                <button id="btn-download" onclick="downloadVideo()">Video laden</button>
+            </div>
+            <div id="download-status" class="status hidden"></div>
+            <div id="video-info" class="info-box hidden"></div>
+        </section>
+
+        <!-- Step 2: Transcription -->
+        <section id="step-2" class="card hidden">
+            <h2>Schritt 2: Transkription</h2>
+            <p>Jedes gesprochene Wort wird automatisch erkannt und transkribiert.</p>
+            <div class="options-row">
+                <label>
+                    Whisper-Modell:
+                    <select id="whisper-model">
+                        <option value="tiny">Tiny (schnell, weniger genau)</option>
+                        <option value="base" selected>Base (ausgewogen)</option>
+                        <option value="small">Small (genauer)</option>
+                        <option value="medium">Medium (sehr genau)</option>
+                        <option value="large">Large (beste Qualität)</option>
+                    </select>
+                </label>
+                <button id="btn-transcribe" onclick="transcribeVideo()">Transkribieren</button>
+            </div>
+            <div id="transcribe-status" class="status hidden"></div>
+            <div id="transcript-result" class="hidden">
+                <h3>Erkannte Sprache: <span id="detected-language"></span></h3>
+                <div class="transcript-box">
+                    <h4>Vollständiges Transkript:</h4>
+                    <p id="full-transcript"></p>
+                </div>
+                <div class="segments-box">
+                    <h4>Segmente mit Zeitstempel:</h4>
+                    <div id="segments-list"></div>
+                </div>
+                <button class="btn-secondary" onclick="downloadSRT()">SRT-Untertitel herunterladen</button>
+            </div>
+        </section>
+
+        <!-- Step 3: Scene Extraction -->
+        <section id="step-3" class="card hidden">
+            <h2>Schritt 3: Szenen-Extraktion</h2>
+            <p>Screenshots werden automatisch aus dem Video extrahiert.</p>
+            <div class="options-row">
+                <label>
+                    Methode:
+                    <select id="extraction-method" onchange="toggleExtractionOptions()">
+                        <option value="interval">Zeitintervall</option>
+                        <option value="scene_detect">Szenenwechsel-Erkennung</option>
+                    </select>
+                </label>
+                <label id="interval-option">
+                    Intervall (Sek.):
+                    <input type="number" id="interval-value" value="2" min="0.5" max="30" step="0.5">
+                </label>
+                <label id="threshold-option" class="hidden">
+                    Empfindlichkeit:
+                    <input type="range" id="threshold-value" min="0.1" max="0.9" step="0.05" value="0.3">
+                    <span id="threshold-display">0.3</span>
+                </label>
+                <button id="btn-extract" onclick="extractScenes()">Szenen extrahieren</button>
+            </div>
+            <div id="extract-status" class="status hidden"></div>
+            <div id="scenes-grid" class="hidden">
+                <div class="scenes-header">
+                    <h3>Extrahierte Szenen: <span id="scene-count"></span></h3>
+                    <div>
+                        <button class="btn-small" onclick="selectAllScenes()">Alle auswählen</button>
+                        <button class="btn-small" onclick="deselectAllScenes()">Alle abwählen</button>
+                    </div>
+                </div>
+                <div id="scenes-container"></div>
+            </div>
+        </section>
+
+        <!-- Step 4: Reconstruction -->
+        <section id="step-4" class="card hidden">
+            <h2>Schritt 4: Video rekonstruieren</h2>
+            <p>Das Video wird aus den ausgewählten Szenen neu zusammengesetzt.</p>
+            <div class="options-row">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="include-subtitles">
+                    Untertitel einbrennen
+                </label>
+                <label id="subtitle-style-option" class="hidden">
+                    Untertitel-Stil:
+                    <select id="subtitle-style">
+                        <option value="default">Standard</option>
+                        <option value="bold">Fett</option>
+                        <option value="outline">Umriss</option>
+                    </select>
+                </label>
+                <button id="btn-reconstruct" onclick="reconstructVideo()">Video erstellen</button>
+            </div>
+            <div id="reconstruct-status" class="status hidden"></div>
+            <div id="download-section" class="hidden">
+                <div class="success-box">
+                    <h3>Video erfolgreich erstellt!</h3>
+                    <p>Dateigröße: <span id="file-size"></span> MB</p>
+                    <a id="download-link" class="btn-download" href="#" download>Fertiges Video herunterladen</a>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

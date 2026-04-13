@@ -198,11 +198,14 @@ async function extractScenes() {
     document.getElementById('scenes-grid').classList.add('hidden');
 
     try {
+        const autoCrop = document.getElementById('auto-crop').checked;
+
         const result = await apiCall('/api/extract-scenes', {
             project_id: projectId,
             method,
             interval: parseFloat(interval),
             threshold: parseFloat(threshold),
+            auto_crop: autoCrop,
         });
 
         showStatus('extract-status', `${result.total_scenes} Szenen erfolgreich extrahiert!`, 'success');
@@ -297,6 +300,7 @@ async function reconstructVideo() {
 
     const includeSubtitles = document.getElementById('include-subtitles').checked;
     const subtitleStyle = document.getElementById('subtitle-style').value;
+    const exportPreset = document.getElementById('export-preset').value;
 
     showStatus('reconstruct-status', 'Video wird rekonstruiert... Das kann bei längeren Videos etwas dauern.', 'loading');
     document.getElementById('download-section').classList.add('hidden');
@@ -307,6 +311,7 @@ async function reconstructVideo() {
             include_subtitles: includeSubtitles,
             subtitle_style: subtitleStyle,
             selected_scenes: Array.from(selectedScenes),
+            export_preset: exportPreset,
         });
 
         showStatus('reconstruct-status', 'Video erfolgreich erstellt!', 'success');
@@ -319,6 +324,59 @@ async function reconstructVideo() {
     } finally {
         btn.disabled = false;
     }
+}
+
+// --- Bulk Upload ---
+
+async function uploadBulkClips(input) {
+    if (!input.files || input.files.length === 0) return;
+    if (!projectId) return;
+
+    const formData = new FormData();
+    for (const file of input.files) {
+        formData.append('files', file);
+    }
+
+    showStatus('extract-status', `${input.files.length} Clips werden hochgeladen und zugeordnet...`, 'loading');
+
+    try {
+        const response = await fetch(`/api/upload-bulk-clips/${projectId}`, {
+            method: 'POST',
+            body: formData,
+        });
+        const result = await response.json();
+
+        if (!response.ok) {
+            throw new Error(result.error || 'Bulk-Upload fehlgeschlagen.');
+        }
+
+        // Update UI for each assigned clip
+        result.assigned_clips.forEach(clip => {
+            const card = document.getElementById(`scene-card-${clip.scene_index}`);
+            const badge = document.getElementById(`badge-${clip.scene_index}`);
+            const revertBtn = document.getElementById(`btn-revert-${clip.scene_index}`);
+            const img = document.getElementById(`scene-img-${clip.scene_index}`);
+
+            if (card && badge && img) {
+                customClips[clip.scene_index] = {
+                    filename: clip.filename,
+                    preview_url: clip.preview_url,
+                };
+                img.src = clip.preview_url;
+                card.classList.add('has-custom-clip');
+                badge.textContent = `Eigener Clip: ${clip.filename}`;
+                badge.classList.remove('hidden');
+                if (revertBtn) revertBtn.classList.remove('hidden');
+            }
+        });
+
+        showStatus('extract-status',
+            `${result.total_assigned} von ${input.files.length} Clips erfolgreich zugeordnet!`, 'success');
+    } catch (err) {
+        showStatus('extract-status', err.message, 'error');
+    }
+
+    input.value = '';
 }
 
 // --- Custom Clip Upload/Remove ---

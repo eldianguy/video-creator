@@ -24,7 +24,37 @@ def get_video_duration(video_path: str) -> float:
     return float(info["format"]["duration"])
 
 
-def extract_scenes(video_path: str, output_dir: str, method: str = "interval", interval: float = 2.0, threshold: float = 0.3) -> list:
+def auto_crop_detect(video_path: str) -> str:
+    """
+    Detect screen recording borders/black bars automatically.
+    Returns an FFmpeg crop filter string, or empty string if no crop needed.
+    """
+    result = subprocess.run(
+        [
+            "ffmpeg", "-i", video_path,
+            "-t", "30",
+            "-vf", "cropdetect=24:16:0",
+            "-f", "null", "-"
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    # Parse the last cropdetect line (most stable after a few seconds)
+    crop_filter = ""
+    for line in result.stderr.split("\n"):
+        if "crop=" in line:
+            try:
+                crop_filter = line.split("crop=")[1].split()[0]
+            except IndexError:
+                continue
+
+    return crop_filter
+
+
+def extract_scenes(video_path: str, output_dir: str, method: str = "interval",
+                   interval: float = 2.0, threshold: float = 0.3,
+                   auto_crop: bool = False) -> list:
     """
     Extract scene screenshots from a video.
 
@@ -34,6 +64,7 @@ def extract_scenes(video_path: str, output_dir: str, method: str = "interval", i
         method: 'interval' (every N seconds) or 'scene_detect' (on scene changes)
         interval: Seconds between frames (for interval method)
         threshold: Scene change sensitivity 0-1 (for scene_detect method)
+        auto_crop: Automatically detect and remove screen recording borders
 
     Returns:
         List of dicts with keys: path, timestamp, scene_index
@@ -41,22 +72,31 @@ def extract_scenes(video_path: str, output_dir: str, method: str = "interval", i
     scenes_dir = os.path.join(output_dir, "scenes")
     os.makedirs(scenes_dir, exist_ok=True)
 
+    # Detect crop if requested
+    crop_filter = ""
+    if auto_crop:
+        crop_filter = auto_crop_detect(video_path)
+
     if method == "scene_detect":
-        return _extract_by_scene_detection(video_path, scenes_dir, threshold)
+        return _extract_by_scene_detection(video_path, scenes_dir, threshold, crop_filter)
     else:
-        return _extract_by_interval(video_path, scenes_dir, interval)
+        return _extract_by_interval(video_path, scenes_dir, interval, crop_filter)
 
 
-def _extract_by_interval(video_path: str, scenes_dir: str, interval: float) -> list:
+def _extract_by_interval(video_path: str, scenes_dir: str, interval: float, crop_filter: str = "") -> list:
     """Extract a frame every N seconds."""
     duration = get_video_duration(video_path)
 
     output_pattern = os.path.join(scenes_dir, "scene_%04d.jpg")
 
+    vf = f"fps=1/{interval}"
+    if crop_filter:
+        vf = f"crop={crop_filter},{vf}"
+
     subprocess.run(
         [
             "ffmpeg", "-i", video_path,
-            "-vf", f"fps=1/{interval}",
+            "-vf", vf,
             "-q:v", "2",
             output_pattern, "-y"
         ],
@@ -83,13 +123,16 @@ def _extract_by_interval(video_path: str, scenes_dir: str, interval: float) -> l
     return scenes
 
 
-def _extract_by_scene_detection(video_path: str, scenes_dir: str, threshold: float) -> list:
+def _extract_by_scene_detection(video_path: str, scenes_dir: str, threshold: float, crop_filter: str = "") -> list:
     """Extract frames at scene change boundaries."""
-    # First pass: detect scene changes and get timestamps
+    select_expr = f"select='gt(scene,{threshold})',showinfo"
+    if crop_filter:
+        select_expr = f"crop={crop_filter},{select_expr}"
+
     result = subprocess.run(
         [
             "ffmpeg", "-i", video_path,
-            "-vf", f"select='gt(scene,{threshold})',showinfo",
+            "-vf", select_expr,
             "-vsync", "vfr",
             "-f", "null", "-"
         ],
@@ -108,22 +151,25 @@ def _extract_by_scene_detection(video_path: str, scenes_dir: str, threshold: flo
             except (ValueError, IndexError):
                 continue
 
+    # Build crop vf for frame extraction
+    crop_vf = []
+    if crop_filter:
+        crop_vf = ["-vf", f"crop={crop_filter}"]
+
     # Extract frames at detected timestamps
     scenes = []
     for idx, ts in enumerate(timestamps, 1):
         filename = f"scene_{idx:04d}.jpg"
         filepath = os.path.join(scenes_dir, filename)
 
-        subprocess.run(
-            [
-                "ffmpeg", "-ss", str(ts),
-                "-i", video_path,
-                "-vframes", "1",
-                "-q:v", "2",
-                filepath, "-y"
-            ],
-            capture_output=True,
-        )
+        cmd = [
+            "ffmpeg", "-ss", str(ts),
+            "-i", video_path,
+            "-vframes", "1",
+            "-q:v", "2",
+        ] + crop_vf + [filepath, "-y"]
+
+        subprocess.run(cmd, capture_output=True)
 
         if os.path.exists(filepath):
             scenes.append({

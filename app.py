@@ -11,7 +11,7 @@ from flask import Flask, render_template, request, jsonify, send_file, send_from
 
 from modules.downloader import download_video
 from modules.transcriber import transcribe_video, generate_srt
-from modules.scene_extractor import extract_scenes, get_scene_with_transcript
+from modules.scene_extractor import extract_scenes, get_scene_with_transcript, auto_crop_detect
 from modules.reconstructor import reconstruct_with_custom_clips, create_final_video
 
 app = Flask(__name__)
@@ -108,6 +108,7 @@ def api_extract_scenes():
     method = data.get("method", "interval")
     interval = float(data.get("interval", 2.0))
     threshold = float(data.get("threshold", 0.3))
+    do_auto_crop = data.get("auto_crop", False)
 
     if project_id not in projects:
         return jsonify({"error": "Projekt nicht gefunden."}), 404
@@ -115,12 +116,20 @@ def api_extract_scenes():
     project = projects[project_id]
 
     try:
+        # Auto-crop detection for screen recordings
+        if do_auto_crop:
+            crop_filter = auto_crop_detect(project["video_path"])
+            project["crop_filter"] = crop_filter
+        else:
+            project["crop_filter"] = ""
+
         scenes = extract_scenes(
             project["video_path"],
             project["dir"],
             method=method,
             interval=interval,
             threshold=threshold,
+            auto_crop=do_auto_crop,
         )
 
         # Enrich scenes with transcript data if available
@@ -244,6 +253,60 @@ def api_custom_clip_preview(project_id, scene_index):
     return jsonify({"error": "Vorschau konnte nicht erstellt werden."}), 500
 
 
+@app.route("/api/upload-bulk-clips/<project_id>", methods=["POST"])
+def api_upload_bulk_clips(project_id):
+    """Upload multiple clips at once to replace all scenes in order."""
+    if project_id not in projects:
+        return jsonify({"error": "Projekt nicht gefunden."}), 404
+
+    project = projects[project_id]
+    scenes = project.get("scenes", [])
+    files = request.files.getlist("files")
+
+    if not files:
+        return jsonify({"error": "Keine Dateien hochgeladen."}), 400
+
+    custom_dir = os.path.join(project["dir"], "custom_clips")
+    os.makedirs(custom_dir, exist_ok=True)
+
+    if "custom_clips" not in project:
+        project["custom_clips"] = {}
+
+    assigned = []
+    for i, file in enumerate(files):
+        if i >= len(scenes):
+            break
+
+        ext = os.path.splitext(file.filename)[1].lower()
+        if ext not in ALLOWED_VIDEO_EXT:
+            continue
+
+        scene_idx = scenes[i]["scene_index"]
+        clip_path = os.path.join(custom_dir, f"custom_{scene_idx}{ext}")
+        file.save(clip_path)
+        project["custom_clips"][scene_idx] = clip_path
+
+        # Generate thumbnail
+        thumb_path = clip_path + ".thumb.jpg"
+        import subprocess
+        subprocess.run(
+            ["ffmpeg", "-i", clip_path, "-vframes", "1", "-q:v", "2", thumb_path, "-y"],
+            capture_output=True,
+        )
+
+        assigned.append({
+            "scene_index": scene_idx,
+            "filename": file.filename,
+            "preview_url": f"/api/custom-clip-preview/{project_id}/{scene_idx}",
+        })
+
+    return jsonify({
+        "success": True,
+        "assigned_clips": assigned,
+        "total_assigned": len(assigned),
+    })
+
+
 @app.route("/api/reconstruct", methods=["POST"])
 def api_reconstruct():
     """Step 4: Reconstruct the video."""
@@ -252,6 +315,7 @@ def api_reconstruct():
     include_subtitles = data.get("include_subtitles", False)
     subtitle_style = data.get("subtitle_style", "default")
     selected_scenes = data.get("selected_scenes", None)
+    export_preset = data.get("export_preset", "original")
 
     if project_id not in projects:
         return jsonify({"error": "Projekt nicht gefunden."}), 404
@@ -264,8 +328,9 @@ def api_reconstruct():
         if selected_scenes is not None:
             scenes = [s for s in scenes if s["scene_index"] in selected_scenes]
 
-        # Get custom clip mappings
+        # Get custom clip mappings and crop filter
         custom_clips = project.get("custom_clips", {})
+        crop_filter = project.get("crop_filter", "")
 
         # Reconstruct with custom clips mixed in
         reconstructed_path = reconstruct_with_custom_clips(
@@ -273,6 +338,8 @@ def api_reconstruct():
             scenes,
             project["dir"],
             custom_clips=custom_clips,
+            export_preset=export_preset,
+            crop_filter=crop_filter,
         )
 
         # Create final video (with optional subtitles)

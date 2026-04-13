@@ -378,6 +378,17 @@ button:disabled {
     color: #fff;
 }
 
+.scenes-header-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.btn-bulk-upload {
+    background: linear-gradient(135deg, #f59e0b, #d97706) !important;
+    cursor: pointer;
+}
+
 #scenes-container {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));

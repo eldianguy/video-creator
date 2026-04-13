@@ -64,27 +64,46 @@ def _normalize_clip(input_path: str, output_path: str, width: int, height: int) 
     return output_path
 
 
-def reconstruct_with_custom_clips(video_path: str, scenes: list, output_dir: str, custom_clips: dict = None) -> str:
+EXPORT_PRESETS = {
+    "original": None,  # Keep original resolution
+    "tiktok": {"width": 1080, "height": 1920},    # 9:16 vertical
+    "tiktok_hd": {"width": 1080, "height": 1920},
+    "youtube": {"width": 1920, "height": 1080},    # 16:9 horizontal
+    "youtube_short": {"width": 1080, "height": 1920},
+    "instagram": {"width": 1080, "height": 1080},  # 1:1 square
+    "instagram_reel": {"width": 1080, "height": 1920},
+}
+
+
+def reconstruct_with_custom_clips(video_path: str, scenes: list, output_dir: str,
+                                  custom_clips: dict = None, export_preset: str = "original",
+                                  crop_filter: str = "") -> str:
     """
     Reconstruct a video, replacing specific scenes with user-uploaded custom clips.
 
     The structure and timing of the original video is preserved.
-    Custom clips are re-encoded to match the original video's resolution
-    so transitions stay seamless.
+    Custom clips are re-encoded to match the target resolution.
 
     Args:
         video_path: Path to the original downloaded video
         scenes: List of scene dicts with timestamp, scene_index
         output_dir: Working directory
         custom_clips: Dict mapping scene_index (int) -> custom clip file path
+        export_preset: Target format ('original', 'tiktok', 'youtube', etc.)
+        crop_filter: FFmpeg crop filter to apply to original clips (for removing screen recording borders)
     """
     if custom_clips is None:
         custom_clips = {}
 
     output_path = os.path.join(output_dir, "reconstructed.mp4")
 
-    # Get original video resolution for normalizing custom clips
-    orig_w, orig_h = _get_video_resolution(video_path)
+    # Determine target resolution
+    preset = EXPORT_PRESETS.get(export_preset)
+    if preset:
+        target_w, target_h = preset["width"], preset["height"]
+    else:
+        orig_w, orig_h = _get_video_resolution(video_path)
+        target_w, target_h = orig_w, orig_h
 
     # Build segments with duration info
     segments = []
@@ -111,15 +130,26 @@ def reconstruct_with_custom_clips(video_path: str, scenes: list, output_dir: str
         scene_idx = seg["scene_index"]
 
         if scene_idx in custom_clips and os.path.exists(custom_clips[scene_idx]):
-            # Use the custom clip, normalized to match original resolution
-            _normalize_clip(custom_clips[scene_idx], clip_path, orig_w, orig_h)
+            # Use the custom clip, normalized to match target resolution
+            _normalize_clip(custom_clips[scene_idx], clip_path, target_w, target_h)
         else:
-            # Cut from original video
+            # Cut from original video, applying crop if needed and scaling to target
+            vf_parts = []
+            if crop_filter:
+                vf_parts.append(f"crop={crop_filter}")
+            vf_parts.append(
+                f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,"
+                f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2,setsar=1"
+            )
+            vf = ",".join(vf_parts)
+
             cmd = [
                 "ffmpeg", "-ss", str(seg["start"]),
                 "-i", video_path,
                 "-t", str(seg["duration"]),
+                "-vf", vf,
                 "-c:v", "libx264", "-c:a", "aac",
+                "-r", "30", "-pix_fmt", "yuv420p",
                 "-avoid_negative_ts", "make_zero",
                 clip_path, "-y"
             ]

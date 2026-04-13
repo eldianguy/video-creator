@@ -2,6 +2,7 @@
 
 let projectId = null;
 let selectedScenes = new Set();
+let customClips = {};  // scene_index -> { filename, preview_url }
 
 // --- Helpers ---
 
@@ -212,19 +213,37 @@ async function extractScenes() {
         container.innerHTML = '';
         selectedScenes.clear();
 
+        customClips = {};
+
         result.scenes.forEach(scene => {
             selectedScenes.add(scene.scene_index);
 
             const card = document.createElement('div');
             card.className = 'scene-card selected';
             card.dataset.index = scene.scene_index;
-            card.onclick = () => toggleScene(card, scene.scene_index);
+            card.id = `scene-card-${scene.scene_index}`;
             card.innerHTML = `
-                <div class="scene-check">✓</div>
-                <img src="${scene.image_url}" alt="Szene ${scene.scene_index}" loading="lazy">
+                <div class="scene-check" onclick="toggleScene(this.parentElement, ${scene.scene_index})">✓</div>
+                <div class="scene-media" onclick="toggleScene(this.parentElement, ${scene.scene_index})">
+                    <img src="${scene.image_url}" alt="Szene ${scene.scene_index}" loading="lazy" id="scene-img-${scene.scene_index}">
+                </div>
                 <div class="scene-info">
                     <div class="scene-time">⏱ ${formatTimestamp(scene.timestamp)}</div>
                     <div class="scene-transcript">${scene.transcript || '(Kein Text)'}</div>
+                    <div class="scene-actions">
+                        <label class="btn-swap" title="Eigenen Clip hochladen">
+                            ↑ Ersetzen
+                            <input type="file" accept="video/*" class="file-input-hidden"
+                                   onchange="uploadCustomClip(${scene.scene_index}, this)">
+                        </label>
+                        <button class="btn-revert hidden" id="btn-revert-${scene.scene_index}"
+                                onclick="removeCustomClip(${scene.scene_index})">
+                            ✕ Original
+                        </button>
+                    </div>
+                    <div class="custom-clip-badge hidden" id="badge-${scene.scene_index}">
+                        Eigener Clip geladen
+                    </div>
                 </div>
             `;
             container.appendChild(card);
@@ -300,6 +319,87 @@ async function reconstructVideo() {
     } finally {
         btn.disabled = false;
     }
+}
+
+// --- Custom Clip Upload/Remove ---
+
+async function uploadCustomClip(sceneIndex, input) {
+    if (!input.files || !input.files[0]) return;
+    if (!projectId) return;
+
+    const file = input.files[0];
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const card = document.getElementById(`scene-card-${sceneIndex}`);
+    const badge = document.getElementById(`badge-${sceneIndex}`);
+    const revertBtn = document.getElementById(`btn-revert-${sceneIndex}`);
+    const img = document.getElementById(`scene-img-${sceneIndex}`);
+
+    badge.textContent = 'Wird hochgeladen...';
+    badge.classList.remove('hidden');
+
+    try {
+        const response = await fetch(`/api/upload-clip/${projectId}/${sceneIndex}`, {
+            method: 'POST',
+            body: formData,
+        });
+        const result = await response.json();
+
+        if (!response.ok) {
+            throw new Error(result.error || 'Upload fehlgeschlagen.');
+        }
+
+        customClips[sceneIndex] = {
+            filename: result.filename,
+            preview_url: result.preview_url,
+        };
+
+        // Show custom clip preview thumbnail
+        img.src = result.preview_url;
+        card.classList.add('has-custom-clip');
+        badge.textContent = `Eigener Clip: ${result.filename}`;
+        revertBtn.classList.remove('hidden');
+    } catch (err) {
+        badge.textContent = `Fehler: ${err.message}`;
+        badge.classList.add('error-badge');
+        setTimeout(() => {
+            if (!customClips[sceneIndex]) {
+                badge.classList.add('hidden');
+                badge.classList.remove('error-badge');
+            }
+        }, 3000);
+    }
+
+    // Reset file input so the same file can be re-selected
+    input.value = '';
+}
+
+async function removeCustomClip(sceneIndex) {
+    if (!projectId) return;
+
+    try {
+        await fetch(`/api/remove-clip/${projectId}/${sceneIndex}`, { method: 'DELETE' });
+    } catch (e) {
+        // Ignore network errors on cleanup
+    }
+
+    delete customClips[sceneIndex];
+
+    const card = document.getElementById(`scene-card-${sceneIndex}`);
+    const badge = document.getElementById(`badge-${sceneIndex}`);
+    const revertBtn = document.getElementById(`btn-revert-${sceneIndex}`);
+    const img = document.getElementById(`scene-img-${sceneIndex}`);
+
+    // Restore original scene image
+    const originalUrl = img.dataset.originalSrc || img.src;
+    // We need to find the original URL — stored as data attribute
+    card.classList.remove('has-custom-clip');
+    badge.classList.add('hidden');
+    revertBtn.classList.add('hidden');
+
+    // Reload original image by rebuilding src
+    img.src = `/api/scene-image/${projectId}/scene_${String(sceneIndex).padStart(4, '0')}.jpg`;
 }
 
 // --- Allow Enter key in URL input ---

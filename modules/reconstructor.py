@@ -28,51 +28,104 @@ def create_scene_video(image_path: str, duration: float, output_path: str, resol
     return output_path
 
 
-def reconstruct_from_original(video_path: str, scenes: list, output_dir: str, include_audio: bool = True) -> str:
-    """
-    Reconstruct a video by cutting and reassembling scenes from the original.
+def _get_video_resolution(video_path: str) -> tuple:
+    """Get width and height of a video."""
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "quiet",
+            "-print_format", "json",
+            "-show_streams",
+            "-select_streams", "v:0",
+            video_path,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    info = json.loads(result.stdout)
+    stream = info["streams"][0]
+    return int(stream["width"]), int(stream["height"])
 
-    This creates a copy of the video with the same scenes,
-    maintaining original quality.
+
+def _normalize_clip(input_path: str, output_path: str, width: int, height: int) -> str:
+    """Re-encode a clip to match the target resolution, framerate, and codec."""
+    subprocess.run(
+        [
+            "ffmpeg", "-i", input_path,
+            "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1",
+            "-c:v", "libx264", "-c:a", "aac",
+            "-ar", "44100", "-ac", "2",
+            "-r", "30",
+            "-pix_fmt", "yuv420p",
+            output_path, "-y"
+        ],
+        capture_output=True,
+        check=True,
+    )
+    return output_path
+
+
+def reconstruct_with_custom_clips(video_path: str, scenes: list, output_dir: str, custom_clips: dict = None) -> str:
     """
+    Reconstruct a video, replacing specific scenes with user-uploaded custom clips.
+
+    The structure and timing of the original video is preserved.
+    Custom clips are re-encoded to match the original video's resolution
+    so transitions stay seamless.
+
+    Args:
+        video_path: Path to the original downloaded video
+        scenes: List of scene dicts with timestamp, scene_index
+        output_dir: Working directory
+        custom_clips: Dict mapping scene_index (int) -> custom clip file path
+    """
+    if custom_clips is None:
+        custom_clips = {}
+
     output_path = os.path.join(output_dir, "reconstructed.mp4")
 
-    # Build filter complex for scene concatenation
-    segments = []
-    filter_parts = []
-    concat_inputs = []
+    # Get original video resolution for normalizing custom clips
+    orig_w, orig_h = _get_video_resolution(video_path)
 
+    # Build segments with duration info
+    segments = []
     for i, scene in enumerate(scenes):
         start = scene["timestamp"]
-        # Calculate duration until next scene
         if i + 1 < len(scenes):
             duration = scenes[i + 1]["timestamp"] - start
         else:
-            # Last scene: get remaining duration
             duration = _get_remaining_duration(video_path, start)
-
         if duration <= 0:
             duration = 2.0
 
-        segments.append({"start": start, "duration": duration})
+        segments.append({
+            "start": start,
+            "duration": duration,
+            "scene_index": scene["scene_index"],
+        })
 
-    # Use concat demuxer approach for clean cuts
     concat_file = os.path.join(output_dir, "concat_list.txt")
     temp_clips = []
 
     for i, seg in enumerate(segments):
         clip_path = os.path.join(output_dir, f"clip_{i:04d}.mp4")
-        temp_clips.append(clip_path)
+        scene_idx = seg["scene_index"]
 
-        cmd = [
-            "ffmpeg", "-ss", str(seg["start"]),
-            "-i", video_path,
-            "-t", str(seg["duration"]),
-            "-c:v", "libx264", "-c:a", "aac",
-            "-avoid_negative_ts", "make_zero",
-            clip_path, "-y"
-        ]
-        subprocess.run(cmd, capture_output=True, check=True)
+        if scene_idx in custom_clips and os.path.exists(custom_clips[scene_idx]):
+            # Use the custom clip, normalized to match original resolution
+            _normalize_clip(custom_clips[scene_idx], clip_path, orig_w, orig_h)
+        else:
+            # Cut from original video
+            cmd = [
+                "ffmpeg", "-ss", str(seg["start"]),
+                "-i", video_path,
+                "-t", str(seg["duration"]),
+                "-c:v", "libx264", "-c:a", "aac",
+                "-avoid_negative_ts", "make_zero",
+                clip_path, "-y"
+            ]
+            subprocess.run(cmd, capture_output=True, check=True)
+
+        temp_clips.append(clip_path)
 
     # Write concat list
     with open(concat_file, "w") as f:

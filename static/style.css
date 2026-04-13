@@ -451,6 +451,86 @@ button:disabled {
     border-color: #6366f1;
 }
 
+/* Scene Swap / Custom Clips */
+.scene-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.btn-swap {
+    padding: 5px 10px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border-radius: 6px;
+    background: linear-gradient(135deg, #f59e0b, #d97706);
+    color: #fff;
+    cursor: pointer;
+    transition: all 0.3s;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border: none;
+}
+
+.btn-swap:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
+}
+
+.file-input-hidden {
+    display: none;
+}
+
+.btn-revert {
+    padding: 5px 10px !important;
+    font-size: 0.75rem !important;
+    border-radius: 6px !important;
+    background: transparent !important;
+    border: 1px solid #ef4444 !important;
+    color: #ef4444 !important;
+}
+
+.btn-revert:hover {
+    background: rgba(239, 68, 68, 0.15) !important;
+    transform: none !important;
+    box-shadow: none !important;
+}
+
+.custom-clip-badge {
+    margin-top: 6px;
+    padding: 4px 8px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    border-radius: 6px;
+    background: rgba(245, 158, 11, 0.15);
+    border: 1px solid #f59e0b;
+    color: #fbbf24;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.custom-clip-badge.error-badge {
+    background: rgba(239, 68, 68, 0.15);
+    border-color: #ef4444;
+    color: #fca5a5;
+}
+
+.scene-card.has-custom-clip {
+    border-color: #f59e0b !important;
+    box-shadow: 0 0 20px rgba(245, 158, 11, 0.2);
+}
+
+.scene-card.has-custom-clip .scene-check {
+    background: #f59e0b;
+    border-color: #f59e0b;
+}
+
+.scene-media {
+    cursor: pointer;
+}
+
 /* Success Box */
 .success-box {
     text-align: center;

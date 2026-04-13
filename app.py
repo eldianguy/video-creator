@@ -12,12 +12,15 @@ from flask import Flask, render_template, request, jsonify, send_file, send_from
 from modules.downloader import download_video
 from modules.transcriber import transcribe_video, generate_srt
 from modules.scene_extractor import extract_scenes, get_scene_with_transcript
-from modules.reconstructor import reconstruct_from_original, create_final_video
+from modules.reconstructor import reconstruct_with_custom_clips, create_final_video
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 500 * 1024 * 1024  # 500MB max upload
 
 WORKSPACE = os.path.join(os.path.dirname(__file__), "workspace")
 os.makedirs(WORKSPACE, exist_ok=True)
+
+ALLOWED_VIDEO_EXT = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 
 # Store active projects in memory
 projects = {}
@@ -155,6 +158,92 @@ def api_scene_image(project_id, filename):
     return send_from_directory(scenes_dir, filename)
 
 
+@app.route("/api/upload-clip/<project_id>/<int:scene_index>", methods=["POST"])
+def api_upload_clip(project_id, scene_index):
+    """Upload a custom video clip to replace a specific scene."""
+    if project_id not in projects:
+        return jsonify({"error": "Projekt nicht gefunden."}), 404
+
+    if "file" not in request.files:
+        return jsonify({"error": "Keine Datei hochgeladen."}), 400
+
+    file = request.files["file"]
+    if not file.filename:
+        return jsonify({"error": "Keine Datei ausgewählt."}), 400
+
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in ALLOWED_VIDEO_EXT:
+        return jsonify({"error": f"Nicht unterstütztes Format. Erlaubt: {', '.join(ALLOWED_VIDEO_EXT)}"}), 400
+
+    project = projects[project_id]
+    custom_dir = os.path.join(project["dir"], "custom_clips")
+    os.makedirs(custom_dir, exist_ok=True)
+
+    clip_path = os.path.join(custom_dir, f"custom_{scene_index}{ext}")
+    file.save(clip_path)
+
+    # Store the custom clip mapping
+    if "custom_clips" not in project:
+        project["custom_clips"] = {}
+    project["custom_clips"][scene_index] = clip_path
+
+    return jsonify({
+        "success": True,
+        "scene_index": scene_index,
+        "filename": file.filename,
+        "preview_url": f"/api/custom-clip-preview/{project_id}/{scene_index}",
+    })
+
+
+@app.route("/api/remove-clip/<project_id>/<int:scene_index>", methods=["DELETE"])
+def api_remove_clip(project_id, scene_index):
+    """Remove a custom clip and revert to the original scene."""
+    if project_id not in projects:
+        return jsonify({"error": "Projekt nicht gefunden."}), 404
+
+    project = projects[project_id]
+    custom_clips = project.get("custom_clips", {})
+
+    if scene_index in custom_clips:
+        clip_path = custom_clips[scene_index]
+        if os.path.exists(clip_path):
+            os.remove(clip_path)
+        del custom_clips[scene_index]
+
+    return jsonify({"success": True, "scene_index": scene_index})
+
+
+@app.route("/api/custom-clip-preview/<project_id>/<int:scene_index>")
+def api_custom_clip_preview(project_id, scene_index):
+    """Generate and serve a thumbnail for an uploaded custom clip."""
+    if project_id not in projects:
+        return jsonify({"error": "Projekt nicht gefunden."}), 404
+
+    project = projects[project_id]
+    custom_clips = project.get("custom_clips", {})
+
+    if scene_index not in custom_clips:
+        return jsonify({"error": "Kein eigener Clip für diese Szene."}), 404
+
+    clip_path = custom_clips[scene_index]
+    thumb_path = clip_path + ".thumb.jpg"
+
+    if not os.path.exists(thumb_path):
+        import subprocess
+        subprocess.run(
+            [
+                "ffmpeg", "-i", clip_path,
+                "-vframes", "1", "-q:v", "2",
+                thumb_path, "-y"
+            ],
+            capture_output=True,
+        )
+
+    if os.path.exists(thumb_path):
+        return send_file(thumb_path, mimetype="image/jpeg")
+    return jsonify({"error": "Vorschau konnte nicht erstellt werden."}), 500
+
+
 @app.route("/api/reconstruct", methods=["POST"])
 def api_reconstruct():
     """Step 4: Reconstruct the video."""
@@ -175,11 +264,15 @@ def api_reconstruct():
         if selected_scenes is not None:
             scenes = [s for s in scenes if s["scene_index"] in selected_scenes]
 
-        # Reconstruct from original video
-        reconstructed_path = reconstruct_from_original(
+        # Get custom clip mappings
+        custom_clips = project.get("custom_clips", {})
+
+        # Reconstruct with custom clips mixed in
+        reconstructed_path = reconstruct_with_custom_clips(
             project["video_path"],
             scenes,
             project["dir"],
+            custom_clips=custom_clips,
         )
 
         # Create final video (with optional subtitles)

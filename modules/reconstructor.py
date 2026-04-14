@@ -46,21 +46,25 @@ def _get_video_resolution(video_path: str) -> tuple:
     return int(stream["width"]), int(stream["height"])
 
 
-def _normalize_clip(input_path: str, output_path: str, width: int, height: int) -> str:
-    """Re-encode a clip to match the target resolution, framerate, and codec."""
-    subprocess.run(
-        [
-            "ffmpeg", "-i", input_path,
-            "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1",
-            "-c:v", "libx264", "-c:a", "aac",
-            "-ar", "44100", "-ac", "2",
-            "-r", "30",
-            "-pix_fmt", "yuv420p",
-            output_path, "-y"
-        ],
-        capture_output=True,
-        check=True,
-    )
+def _normalize_clip(input_path: str, output_path: str, width: int, height: int, target_duration: float = None) -> str:
+    """
+    Re-encode a clip to match the target resolution, framerate, and codec.
+    If target_duration is set, trim the clip to that duration.
+    """
+    cmd = [
+        "ffmpeg", "-i", input_path,
+    ]
+    if target_duration is not None:
+        cmd += ["-t", str(target_duration)]
+    cmd += [
+        "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1",
+        "-c:v", "libx264", "-an",
+        "-ar", "44100", "-ac", "2",
+        "-r", "30",
+        "-pix_fmt", "yuv420p",
+        output_path, "-y"
+    ]
+    subprocess.run(cmd, capture_output=True, check=True)
     return output_path
 
 
@@ -77,12 +81,14 @@ EXPORT_PRESETS = {
 
 def reconstruct_with_custom_clips(video_path: str, scenes: list, output_dir: str,
                                   custom_clips: dict = None, export_preset: str = "original",
-                                  crop_filter: str = "") -> str:
+                                  crop_filter: str = "", keep_original_audio: bool = True) -> str:
     """
     Reconstruct a video, replacing specific scenes with user-uploaded custom clips.
 
     The structure and timing of the original video is preserved.
-    Custom clips are re-encoded to match the target resolution.
+    Custom clips are trimmed to match the original scene duration.
+    When keep_original_audio is True, the original video's full audio track
+    (music, beats, effects) is used instead of audio from individual clips.
 
     Args:
         video_path: Path to the original downloaded video
@@ -90,7 +96,8 @@ def reconstruct_with_custom_clips(video_path: str, scenes: list, output_dir: str
         output_dir: Working directory
         custom_clips: Dict mapping scene_index (int) -> custom clip file path
         export_preset: Target format ('original', 'tiktok', 'youtube', etc.)
-        crop_filter: FFmpeg crop filter to apply to original clips (for removing screen recording borders)
+        crop_filter: FFmpeg crop filter to apply to original clips
+        keep_original_audio: Use the original video's audio track (for beat-synced edits)
     """
     if custom_clips is None:
         custom_clips = {}
@@ -130,10 +137,14 @@ def reconstruct_with_custom_clips(video_path: str, scenes: list, output_dir: str
         scene_idx = seg["scene_index"]
 
         if scene_idx in custom_clips and os.path.exists(custom_clips[scene_idx]):
-            # Use the custom clip, normalized to match target resolution
-            _normalize_clip(custom_clips[scene_idx], clip_path, target_w, target_h)
+            # Use the custom clip, trimmed to match original scene duration
+            _normalize_clip(
+                custom_clips[scene_idx], clip_path,
+                target_w, target_h,
+                target_duration=seg["duration"],
+            )
         else:
-            # Cut from original video, applying crop if needed and scaling to target
+            # Cut from original video (video-only when keeping original audio)
             vf_parts = []
             if crop_filter:
                 vf_parts.append(f"crop={crop_filter}")
@@ -148,7 +159,7 @@ def reconstruct_with_custom_clips(video_path: str, scenes: list, output_dir: str
                 "-i", video_path,
                 "-t", str(seg["duration"]),
                 "-vf", vf,
-                "-c:v", "libx264", "-c:a", "aac",
+                "-c:v", "libx264", "-an",
                 "-r", "30", "-pix_fmt", "yuv420p",
                 "-avoid_negative_ts", "make_zero",
                 clip_path, "-y"
@@ -162,24 +173,49 @@ def reconstruct_with_custom_clips(video_path: str, scenes: list, output_dir: str
         for clip in temp_clips:
             f.write(f"file '{clip}'\n")
 
-    # Concatenate all clips
+    # Concatenate all video clips (video-only)
+    video_only_path = os.path.join(output_dir, "reconstructed_video_only.mp4")
     subprocess.run(
         [
             "ffmpeg", "-f", "concat", "-safe", "0",
             "-i", concat_file,
             "-c", "copy",
-            output_path, "-y"
+            video_only_path, "-y"
         ],
         capture_output=True,
         check=True,
     )
 
-    # Clean up temp clips
+    if keep_original_audio:
+        # Merge reconstructed video with the original audio track
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-i", video_only_path,
+                "-i", video_path,
+                "-c:v", "copy",
+                "-c:a", "aac",
+                "-map", "0:v:0",
+                "-map", "1:a:0",
+                "-shortest",
+                output_path, "-y"
+            ],
+            capture_output=True,
+            check=True,
+        )
+    else:
+        # No original audio - just use the video-only file
+        os.rename(video_only_path, output_path)
+        video_only_path = None
+
+    # Clean up temp files
     for clip in temp_clips:
         if os.path.exists(clip):
             os.remove(clip)
     if os.path.exists(concat_file):
         os.remove(concat_file)
+    if video_only_path and os.path.exists(video_only_path):
+        os.remove(video_only_path)
 
     return output_path
 

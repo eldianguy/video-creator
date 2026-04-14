@@ -6,6 +6,12 @@ let customClips = {};  // scene_index -> { filename, preview_url }
 
 // --- Helpers ---
 
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
 function showStatus(elementId, message, type) {
     const el = document.getElementById(elementId);
     el.className = `status ${type}`;
@@ -93,13 +99,72 @@ async function downloadVideo() {
 
         const info = document.getElementById('video-info');
         info.innerHTML = `
-            <p><strong>Titel:</strong> ${result.title}</p>
+            <p><strong>Titel:</strong> ${escapeHtml(result.title)}</p>
             <p><strong>Dauer:</strong> ${formatTime(result.duration)}</p>
-            <p><strong>Uploader:</strong> ${result.uploader}</p>
+            <p><strong>Uploader:</strong> ${escapeHtml(result.uploader)}</p>
         `;
         info.classList.remove('hidden');
 
         // Unlock step 2
+        setStepActive(2);
+        showSection('step-2');
+    } catch (err) {
+        showStatus('download-status', err.message, 'error');
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+// --- Step 1b: Local file upload ---
+
+function updateFileLabel(input) {
+    const label = document.getElementById('file-upload-text');
+    if (input.files && input.files[0]) {
+        label.textContent = input.files[0].name;
+    } else {
+        label.textContent = 'Lokale Videodatei auswählen...';
+    }
+}
+
+async function uploadLocalVideo() {
+    const input = document.getElementById('local-file-input');
+    if (!input.files || !input.files[0]) {
+        showStatus('download-status', 'Bitte wähle eine Videodatei aus.', 'error');
+        return;
+    }
+
+    const btn = document.getElementById('btn-upload-local');
+    btn.disabled = true;
+
+    const formData = new FormData();
+    formData.append('file', input.files[0]);
+
+    showStatus('download-status', 'Video wird hochgeladen...', 'loading');
+    document.getElementById('video-info').classList.add('hidden');
+
+    try {
+        const response = await fetch('/api/upload-local', {
+            method: 'POST',
+            body: formData,
+        });
+        const result = await response.json();
+
+        if (!response.ok) {
+            throw new Error(result.error || 'Upload fehlgeschlagen.');
+        }
+
+        projectId = result.project_id;
+
+        showStatus('download-status', 'Video erfolgreich geladen!', 'success');
+
+        const info = document.getElementById('video-info');
+        info.innerHTML = `
+            <p><strong>Titel:</strong> ${escapeHtml(result.title)}</p>
+            <p><strong>Dauer:</strong> ${formatTime(result.duration)}</p>
+            <p><strong>Quelle:</strong> ${escapeHtml(result.uploader)}</p>
+        `;
+        info.classList.remove('hidden');
+
         setStepActive(2);
         showSection('step-2');
     } catch (err) {
@@ -143,7 +208,7 @@ async function transcribeVideo() {
             div.className = 'segment-item';
             div.innerHTML = `
                 <span class="segment-time">${formatTimestamp(seg.start)} → ${formatTimestamp(seg.end)}</span>
-                <span class="segment-text">${seg.text}</span>
+                <span class="segment-text">${escapeHtml(seg.text)}</span>
             `;
             segList.appendChild(div);
         });
@@ -158,6 +223,13 @@ async function transcribeVideo() {
     } finally {
         btn.disabled = false;
     }
+}
+
+function skipTranscription() {
+    // Skip transcription and go directly to scene extraction
+    setStepActive(3);
+    showSection('step-3');
+    showStatus('transcribe-status', 'Transkription übersprungen.', 'success');
 }
 
 function downloadSRT() {
@@ -232,7 +304,7 @@ async function extractScenes() {
                 </div>
                 <div class="scene-info">
                     <div class="scene-time">⏱ ${formatTimestamp(scene.timestamp)}</div>
-                    <div class="scene-transcript">${scene.transcript || '(Kein Text)'}</div>
+                    <div class="scene-transcript">${escapeHtml(scene.transcript || '(Kein Text)')}</div>
                     <div class="scene-actions">
                         <label class="btn-swap" title="Eigenen Clip hochladen">
                             ↑ Ersetzen
@@ -301,6 +373,7 @@ async function reconstructVideo() {
     const includeSubtitles = document.getElementById('include-subtitles').checked;
     const subtitleStyle = document.getElementById('subtitle-style').value;
     const exportPreset = document.getElementById('export-preset').value;
+    const keepOriginalAudio = document.getElementById('keep-original-audio').checked;
 
     showStatus('reconstruct-status', 'Video wird rekonstruiert... Das kann bei längeren Videos etwas dauern.', 'loading');
     document.getElementById('download-section').classList.add('hidden');
@@ -312,6 +385,7 @@ async function reconstructVideo() {
             subtitle_style: subtitleStyle,
             selected_scenes: Array.from(selectedScenes),
             export_preset: exportPreset,
+            keep_original_audio: keepOriginalAudio,
         });
 
         showStatus('reconstruct-status', 'Video erfolgreich erstellt!', 'success');

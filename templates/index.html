@@ -36,13 +36,22 @@
             </div>
         </div>
 
-        <!-- Step 1: URL Input -->
+        <!-- Step 1: URL Input or File Upload -->
         <section id="step-1" class="card">
-            <h2>Schritt 1: Video-Link einfügen</h2>
-            <p>Unterstützt YouTube, TikTok und viele weitere Plattformen.</p>
+            <h2>Schritt 1: Video laden</h2>
+            <p>Video-Link einfügen oder lokale Datei hochladen (z.B. Screen Recording).</p>
             <div class="input-group">
                 <input type="text" id="video-url" placeholder="https://www.youtube.com/watch?v=... oder TikTok-Link">
-                <button id="btn-download" onclick="downloadVideo()">Video laden</button>
+                <button id="btn-download" onclick="downloadVideo()">Link laden</button>
+            </div>
+            <div class="upload-divider">oder</div>
+            <div class="input-group">
+                <label class="file-upload-label">
+                    <span id="file-upload-text">Lokale Videodatei auswählen...</span>
+                    <input type="file" accept="video/*" id="local-file-input" class="file-input-hidden"
+                           onchange="updateFileLabel(this)">
+                </label>
+                <button id="btn-upload-local" onclick="uploadLocalVideo()">Datei laden</button>
             </div>
             <div id="download-status" class="status hidden"></div>
             <div id="video-info" class="info-box hidden"></div>
@@ -64,6 +73,7 @@
                     </select>
                 </label>
                 <button id="btn-transcribe" onclick="transcribeVideo()">Transkribieren</button>
+                <button class="btn-secondary btn-skip" onclick="skipTranscription()">Überspringen</button>
             </div>
             <div id="transcribe-status" class="status hidden"></div>
             <div id="transcript-result" class="hidden">
@@ -140,6 +150,10 @@
                         <option value="instagram">Instagram Post (1:1, 1080x1080)</option>
                         <option value="instagram_reel">Instagram Reel (9:16, 1080x1920)</option>
                     </select>
+                </label>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="keep-original-audio" checked>
+                    Original-Audio behalten (Musik/Beats)
                 </label>
                 <label class="checkbox-label">
                     <input type="checkbox" id="include-subtitles">

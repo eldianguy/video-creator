@@ -64,6 +64,56 @@ def api_download():
         return jsonify({"error": f"Download fehlgeschlagen: {str(e)}"}), 500
 
 
+@app.route("/api/upload-local", methods=["POST"])
+def api_upload_local():
+    """Step 1 (alt): Upload a local video file (e.g. screen recording)."""
+    if "file" not in request.files:
+        return jsonify({"error": "Keine Datei hochgeladen."}), 400
+
+    file = request.files["file"]
+    if not file.filename:
+        return jsonify({"error": "Keine Datei ausgewählt."}), 400
+
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in ALLOWED_VIDEO_EXT:
+        return jsonify({"error": f"Nicht unterstütztes Format. Erlaubt: {', '.join(ALLOWED_VIDEO_EXT)}"}), 400
+
+    project_id = uuid.uuid4().hex[:12]
+    project_dir = os.path.join(WORKSPACE, project_id)
+    os.makedirs(project_dir, exist_ok=True)
+
+    video_path = os.path.join(project_dir, f"source{ext}")
+    file.save(video_path)
+
+    # Get video duration via ffprobe
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", video_path],
+            capture_output=True, text=True,
+        )
+        info = json.loads(result.stdout)
+        duration = float(info["format"].get("duration", 0))
+    except Exception:
+        duration = 0
+
+    title = os.path.splitext(file.filename)[0]
+    projects[project_id] = {
+        "dir": project_dir,
+        "video_path": video_path,
+        "title": title,
+        "duration": duration,
+        "url": f"local://{file.filename}",
+    }
+
+    return jsonify({
+        "project_id": project_id,
+        "title": title,
+        "duration": duration,
+        "uploader": "Lokale Datei",
+    })
+
+
 @app.route("/api/transcribe", methods=["POST"])
 def api_transcribe():
     """Step 2: Transcribe the video audio."""
@@ -316,6 +366,7 @@ def api_reconstruct():
     subtitle_style = data.get("subtitle_style", "default")
     selected_scenes = data.get("selected_scenes", None)
     export_preset = data.get("export_preset", "original")
+    keep_original_audio = data.get("keep_original_audio", True)
 
     if project_id not in projects:
         return jsonify({"error": "Projekt nicht gefunden."}), 404
@@ -340,6 +391,7 @@ def api_reconstruct():
             custom_clips=custom_clips,
             export_preset=export_preset,
             crop_filter=crop_filter,
+            keep_original_audio=keep_original_audio,
         )
 
         # Create final video (with optional subtitles)

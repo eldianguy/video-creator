@@ -148,6 +148,55 @@ header h1 {
     color: #555;
 }
 
+/* Upload Divider */
+.upload-divider {
+    text-align: center;
+    color: #555;
+    margin: 14px 0;
+    font-size: 0.9rem;
+    position: relative;
+}
+
+.upload-divider::before,
+.upload-divider::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    width: 40%;
+    height: 1px;
+    background: #2a2a4a;
+}
+
+.upload-divider::before { left: 0; }
+.upload-divider::after { right: 0; }
+
+/* File Upload Label */
+.file-upload-label {
+    flex: 1;
+    padding: 14px 18px;
+    border: 2px dashed #2a2a4a;
+    border-radius: 12px;
+    background: #0f0f1a;
+    color: #888;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: all 0.3s;
+    display: flex;
+    align-items: center;
+}
+
+.file-upload-label:hover {
+    border-color: #6366f1;
+    color: #a5b4fc;
+}
+
+/* Skip Button */
+.btn-skip {
+    padding: 12px 24px !important;
+    font-size: 0.9rem !important;
+    margin-top: 0 !important;
+}
+
 /* Buttons */
 button, .btn-download {
     padding: 14px 28px;

@@ -158,6 +158,7 @@ def api_extract_scenes():
     method = data.get("method", "interval")
     interval = float(data.get("interval", 2.0))
     threshold = float(data.get("threshold", 0.3))
+    min_scene_duration = float(data.get("min_scene_duration", 0.0))
     do_auto_crop = data.get("auto_crop", False)
 
     if project_id not in projects:
@@ -179,6 +180,7 @@ def api_extract_scenes():
             method=method,
             interval=interval,
             threshold=threshold,
+            min_scene_duration=min_scene_duration,
             auto_crop=do_auto_crop,
         )
 
@@ -305,16 +307,32 @@ def api_custom_clip_preview(project_id, scene_index):
 
 @app.route("/api/upload-bulk-clips/<project_id>", methods=["POST"])
 def api_upload_bulk_clips(project_id):
-    """Upload multiple clips at once to replace all scenes in order."""
+    """Upload multiple clips at once to replace scenes in order.
+
+    If 'selected_scenes' is provided (JSON array of scene indices),
+    clips are mapped only to those scenes in order. Otherwise, clips
+    are mapped to all scenes sequentially.
+    """
     if project_id not in projects:
         return jsonify({"error": "Projekt nicht gefunden."}), 404
 
     project = projects[project_id]
-    scenes = project.get("scenes", [])
+    all_scenes = project.get("scenes", [])
     files = request.files.getlist("files")
 
     if not files:
         return jsonify({"error": "Keine Dateien hochgeladen."}), 400
+
+    # Use selected scene indices if provided, otherwise all scenes
+    selected_raw = request.form.get("selected_scenes", "")
+    if selected_raw:
+        try:
+            selected_indices = set(json.loads(selected_raw))
+            target_scenes = [s for s in all_scenes if s["scene_index"] in selected_indices]
+        except (json.JSONDecodeError, TypeError):
+            target_scenes = all_scenes
+    else:
+        target_scenes = all_scenes
 
     custom_dir = os.path.join(project["dir"], "custom_clips")
     os.makedirs(custom_dir, exist_ok=True)
@@ -324,14 +342,14 @@ def api_upload_bulk_clips(project_id):
 
     assigned = []
     for i, file in enumerate(files):
-        if i >= len(scenes):
+        if i >= len(target_scenes):
             break
 
         ext = os.path.splitext(file.filename)[1].lower()
         if ext not in ALLOWED_VIDEO_EXT:
             continue
 
-        scene_idx = scenes[i]["scene_index"]
+        scene_idx = target_scenes[i]["scene_index"]
         clip_path = os.path.join(custom_dir, f"custom_{scene_idx}{ext}")
         file.save(clip_path)
         project["custom_clips"][scene_idx] = clip_path

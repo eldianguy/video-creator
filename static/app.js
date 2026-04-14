@@ -242,8 +242,18 @@ function downloadSRT() {
 
 function toggleExtractionOptions() {
     const method = document.getElementById('extraction-method').value;
-    document.getElementById('interval-option').classList.toggle('hidden', method !== 'interval');
-    document.getElementById('threshold-option').classList.toggle('hidden', method !== 'scene_detect');
+    const isInterval = method === 'interval';
+    const isSceneDetect = method === 'scene_detect';
+    const isAnime = method === 'anime';
+
+    document.getElementById('interval-option').classList.toggle('hidden', !isInterval);
+    document.getElementById('threshold-option').classList.toggle('hidden', !isSceneDetect);
+
+    // Anime preset auto-configures for fast cuts
+    if (isAnime) {
+        document.getElementById('threshold-value').value = '0.1';
+        document.getElementById('threshold-display').textContent = '0.1';
+    }
 }
 
 // Threshold display update
@@ -262,9 +272,18 @@ async function extractScenes() {
     const btn = document.getElementById('btn-extract');
     btn.disabled = true;
 
-    const method = document.getElementById('extraction-method').value;
+    let method = document.getElementById('extraction-method').value;
     const interval = document.getElementById('interval-value').value;
     const threshold = document.getElementById('threshold-value').value;
+
+    // Anime preset: use scene_detect with optimized settings for fast cuts
+    let animeThreshold = parseFloat(threshold);
+    let minSceneDuration = 0.0;
+    if (method === 'anime') {
+        method = 'scene_detect';
+        animeThreshold = 0.1;
+        minSceneDuration = 0.3;
+    }
 
     showStatus('extract-status', 'Szenen werden extrahiert...', 'loading');
     document.getElementById('scenes-grid').classList.add('hidden');
@@ -276,7 +295,8 @@ async function extractScenes() {
             project_id: projectId,
             method,
             interval: parseFloat(interval),
-            threshold: parseFloat(threshold),
+            threshold: animeThreshold,
+            min_scene_duration: minSceneDuration,
             auto_crop: autoCrop,
         });
 
@@ -410,6 +430,8 @@ async function uploadBulkClips(input) {
     for (const file of input.files) {
         formData.append('files', file);
     }
+    // Send selected scenes so clips map to the correct scenes
+    formData.append('selected_scenes', JSON.stringify(Array.from(selectedScenes)));
 
     showStatus('extract-status', `${input.files.length} Clips werden hochgeladen und zugeordnet...`, 'loading');
 

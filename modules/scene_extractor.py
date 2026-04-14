@@ -54,6 +54,7 @@ def auto_crop_detect(video_path: str) -> str:
 
 def extract_scenes(video_path: str, output_dir: str, method: str = "interval",
                    interval: float = 2.0, threshold: float = 0.3,
+                   min_scene_duration: float = 0.0,
                    auto_crop: bool = False) -> list:
     """
     Extract scene screenshots from a video.
@@ -64,6 +65,7 @@ def extract_scenes(video_path: str, output_dir: str, method: str = "interval",
         method: 'interval' (every N seconds) or 'scene_detect' (on scene changes)
         interval: Seconds between frames (for interval method)
         threshold: Scene change sensitivity 0-1 (for scene_detect method)
+        min_scene_duration: Minimum seconds between detected scenes (filters duplicates)
         auto_crop: Automatically detect and remove screen recording borders
 
     Returns:
@@ -78,7 +80,7 @@ def extract_scenes(video_path: str, output_dir: str, method: str = "interval",
         crop_filter = auto_crop_detect(video_path)
 
     if method == "scene_detect":
-        return _extract_by_scene_detection(video_path, scenes_dir, threshold, crop_filter)
+        return _extract_by_scene_detection(video_path, scenes_dir, threshold, crop_filter, min_scene_duration)
     else:
         return _extract_by_interval(video_path, scenes_dir, interval, crop_filter)
 
@@ -123,7 +125,8 @@ def _extract_by_interval(video_path: str, scenes_dir: str, interval: float, crop
     return scenes
 
 
-def _extract_by_scene_detection(video_path: str, scenes_dir: str, threshold: float, crop_filter: str = "") -> list:
+def _extract_by_scene_detection(video_path: str, scenes_dir: str, threshold: float,
+                                crop_filter: str = "", min_scene_duration: float = 0.0) -> list:
     """Extract frames at scene change boundaries."""
     select_expr = f"select='gt(scene,{threshold})',showinfo"
     if crop_filter:
@@ -141,15 +144,21 @@ def _extract_by_scene_detection(video_path: str, scenes_dir: str, threshold: flo
     )
 
     # Extract timestamps from showinfo output
-    timestamps = [0.0]  # Always include the first frame
+    raw_timestamps = [0.0]  # Always include the first frame
     for line in result.stderr.split("\n"):
         if "pts_time:" in line:
             try:
                 pts_part = line.split("pts_time:")[1].split()[0]
                 ts = float(pts_part)
-                timestamps.append(round(ts, 2))
+                raw_timestamps.append(round(ts, 2))
             except (ValueError, IndexError):
                 continue
+
+    # Filter out scenes that are too close together (important for fast anime cuts)
+    timestamps = [raw_timestamps[0]]
+    for ts in raw_timestamps[1:]:
+        if ts - timestamps[-1] >= min_scene_duration:
+            timestamps.append(ts)
 
     # Build crop vf for frame extraction
     crop_vf = []

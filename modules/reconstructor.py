@@ -8,26 +8,6 @@ import subprocess
 import json
 
 
-def create_scene_video(image_path: str, duration: float, output_path: str, resolution: str = "1920x1080") -> str:
-    """Create a video clip from a single image."""
-    width, height = resolution.split("x")
-    subprocess.run(
-        [
-            "ffmpeg", "-loop", "1",
-            "-i", image_path,
-            "-t", str(duration),
-            "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2",
-            "-c:v", "libx264",
-            "-pix_fmt", "yuv420p",
-            "-r", "30",
-            output_path, "-y"
-        ],
-        capture_output=True,
-        check=True,
-    )
-    return output_path
-
-
 def _get_video_resolution(video_path: str) -> tuple:
     """Get width and height of a video."""
     result = subprocess.run(
@@ -46,36 +26,88 @@ def _get_video_resolution(video_path: str) -> tuple:
     return int(stream["width"]), int(stream["height"])
 
 
-def _normalize_clip(input_path: str, output_path: str, width: int, height: int, target_duration: float = None) -> str:
+def _get_clip_duration(video_path: str) -> float:
+    """Get the duration of a video clip in seconds."""
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "quiet",
+            "-print_format", "json",
+            "-show_format",
+            video_path,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    info = json.loads(result.stdout)
+    return float(info["format"]["duration"])
+
+
+def _build_scale_filter(target_w: int, target_h: int, fill: bool = False) -> str:
+    """
+    Build an FFmpeg scale+pad filter string.
+
+    fill=False: Letterbox (fit inside, black bars)
+    fill=True:  Center-crop (fill entire frame, crop overflow) - best for TikTok
+    """
+    if fill:
+        return (
+            f"scale={target_w}:{target_h}:force_original_aspect_ratio=increase,"
+            f"crop={target_w}:{target_h},setsar=1"
+        )
+    else:
+        return (
+            f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,"
+            f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2,setsar=1"
+        )
+
+
+def _normalize_clip(input_path: str, output_path: str, width: int, height: int,
+                    target_duration: float = None, fill: bool = False) -> str:
     """
     Re-encode a clip to match the target resolution, framerate, and codec.
-    If target_duration is set, trim the clip to that duration.
+    If target_duration is set and clip is shorter, the last frame is frozen.
+    If clip is longer, it is trimmed.
     """
-    cmd = [
-        "ffmpeg", "-i", input_path,
-    ]
-    if target_duration is not None:
-        cmd += ["-t", str(target_duration)]
-    cmd += [
-        "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1",
-        "-c:v", "libx264", "-an",
-        "-ar", "44100", "-ac", "2",
-        "-r", "30",
-        "-pix_fmt", "yuv420p",
-        output_path, "-y"
-    ]
+    scale_filter = _build_scale_filter(width, height, fill=fill)
+
+    # Check actual clip duration to decide strategy
+    clip_dur = _get_clip_duration(input_path)
+
+    if target_duration is not None and clip_dur < target_duration:
+        # Clip is shorter than scene: use tpad to freeze last frame
+        pad_dur = target_duration - clip_dur
+        vf = f"{scale_filter},tpad=stop_mode=clone:stop_duration={pad_dur:.3f}"
+        cmd = [
+            "ffmpeg", "-i", input_path,
+            "-vf", vf,
+            "-t", str(target_duration),
+            "-c:v", "libx264", "-an",
+            "-r", "30", "-pix_fmt", "yuv420p",
+            output_path, "-y"
+        ]
+    else:
+        cmd = ["ffmpeg", "-i", input_path]
+        if target_duration is not None:
+            cmd += ["-t", str(target_duration)]
+        cmd += [
+            "-vf", scale_filter,
+            "-c:v", "libx264", "-an",
+            "-r", "30", "-pix_fmt", "yuv420p",
+            output_path, "-y"
+        ]
+
     subprocess.run(cmd, capture_output=True, check=True)
     return output_path
 
 
 EXPORT_PRESETS = {
-    "original": None,  # Keep original resolution
-    "tiktok": {"width": 1080, "height": 1920},    # 9:16 vertical
-    "tiktok_hd": {"width": 1080, "height": 1920},
-    "youtube": {"width": 1920, "height": 1080},    # 16:9 horizontal
-    "youtube_short": {"width": 1080, "height": 1920},
-    "instagram": {"width": 1080, "height": 1080},  # 1:1 square
-    "instagram_reel": {"width": 1080, "height": 1920},
+    "original": {"fill": False},
+    "tiktok": {"width": 1080, "height": 1920, "fill": True},
+    "tiktok_hd": {"width": 1080, "height": 1920, "fill": True},
+    "youtube": {"width": 1920, "height": 1080, "fill": False},
+    "youtube_short": {"width": 1080, "height": 1920, "fill": True},
+    "instagram": {"width": 1080, "height": 1080, "fill": True},
+    "instagram_reel": {"width": 1080, "height": 1920, "fill": True},
 }
 
 
@@ -86,31 +118,25 @@ def reconstruct_with_custom_clips(video_path: str, scenes: list, output_dir: str
     Reconstruct a video, replacing specific scenes with user-uploaded custom clips.
 
     The structure and timing of the original video is preserved.
-    Custom clips are trimmed to match the original scene duration.
+    Custom clips are trimmed/extended to match the original scene duration.
     When keep_original_audio is True, the original video's full audio track
     (music, beats, effects) is used instead of audio from individual clips.
-
-    Args:
-        video_path: Path to the original downloaded video
-        scenes: List of scene dicts with timestamp, scene_index
-        output_dir: Working directory
-        custom_clips: Dict mapping scene_index (int) -> custom clip file path
-        export_preset: Target format ('original', 'tiktok', 'youtube', etc.)
-        crop_filter: FFmpeg crop filter to apply to original clips
-        keep_original_audio: Use the original video's audio track (for beat-synced edits)
     """
     if custom_clips is None:
         custom_clips = {}
 
     output_path = os.path.join(output_dir, "reconstructed.mp4")
 
-    # Determine target resolution
-    preset = EXPORT_PRESETS.get(export_preset)
-    if preset:
+    # Determine target resolution and fill mode
+    preset = EXPORT_PRESETS.get(export_preset, EXPORT_PRESETS["original"])
+    fill_mode = preset.get("fill", False)
+    if "width" in preset:
         target_w, target_h = preset["width"], preset["height"]
     else:
         orig_w, orig_h = _get_video_resolution(video_path)
         target_w, target_h = orig_w, orig_h
+
+    scale_filter = _build_scale_filter(target_w, target_h, fill=fill_mode)
 
     # Build segments with duration info
     segments = []
@@ -137,21 +163,19 @@ def reconstruct_with_custom_clips(video_path: str, scenes: list, output_dir: str
         scene_idx = seg["scene_index"]
 
         if scene_idx in custom_clips and os.path.exists(custom_clips[scene_idx]):
-            # Use the custom clip, trimmed to match original scene duration
+            # Use the custom clip, matched to original scene duration
             _normalize_clip(
                 custom_clips[scene_idx], clip_path,
                 target_w, target_h,
                 target_duration=seg["duration"],
+                fill=fill_mode,
             )
         else:
-            # Cut from original video (video-only when keeping original audio)
+            # Cut from original video (video-only)
             vf_parts = []
             if crop_filter:
                 vf_parts.append(f"crop={crop_filter}")
-            vf_parts.append(
-                f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,"
-                f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2,setsar=1"
-            )
+            vf_parts.append(scale_filter)
             vf = ",".join(vf_parts)
 
             cmd = [
@@ -187,24 +211,37 @@ def reconstruct_with_custom_clips(video_path: str, scenes: list, output_dir: str
     )
 
     if keep_original_audio:
-        # Merge reconstructed video with the original audio track
+        # Extract original audio track to a separate file first
+        audio_path = os.path.join(output_dir, "original_audio.aac")
+        subprocess.run(
+            [
+                "ffmpeg", "-i", video_path,
+                "-vn", "-c:a", "aac", "-b:a", "192k",
+                audio_path, "-y"
+            ],
+            capture_output=True,
+            check=True,
+        )
+
+        # Merge: use video duration, loop/pad audio if needed
         subprocess.run(
             [
                 "ffmpeg",
                 "-i", video_only_path,
-                "-i", video_path,
+                "-i", audio_path,
                 "-c:v", "copy",
                 "-c:a", "aac",
                 "-map", "0:v:0",
                 "-map", "1:a:0",
-                "-shortest",
                 output_path, "-y"
             ],
             capture_output=True,
             check=True,
         )
+
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
     else:
-        # No original audio - just use the video-only file
         os.rename(video_only_path, output_path)
         video_only_path = None
 
@@ -221,15 +258,7 @@ def reconstruct_with_custom_clips(video_path: str, scenes: list, output_dir: str
 
 
 def add_subtitles_to_video(video_path: str, srt_path: str, output_path: str, style: str = "default") -> str:
-    """
-    Burn subtitles into a video file.
-
-    Args:
-        video_path: Source video
-        srt_path: SRT subtitle file
-        output_path: Output video path
-        style: Subtitle style ('default', 'bold', 'outline')
-    """
+    """Burn subtitles into a video file."""
     style_map = {
         "default": "FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2",
         "bold": "FontSize=28,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=3",
@@ -237,8 +266,6 @@ def add_subtitles_to_video(video_path: str, srt_path: str, output_path: str, sty
     }
 
     subtitle_style = style_map.get(style, style_map["default"])
-
-    # Escape special characters in path for FFmpeg filter
     escaped_srt = srt_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
 
     subprocess.run(
@@ -253,23 +280,20 @@ def add_subtitles_to_video(video_path: str, srt_path: str, output_path: str, sty
         capture_output=True,
         check=True,
     )
-
     return output_path
 
 
-def create_final_video(video_path: str, output_dir: str, srt_path: str = None, include_subtitles: bool = False, subtitle_style: str = "default") -> str:
+def create_final_video(video_path: str, output_dir: str, srt_path: str = None,
+                       include_subtitles: bool = False, subtitle_style: str = "default") -> str:
     """
     Create the final downloadable video.
-
-    If subtitles are requested and an SRT file exists, burn them into the video.
-    Otherwise, just copy the reconstructed video.
+    Strips all metadata from the output to avoid leaking source information.
     """
     if include_subtitles and srt_path and os.path.exists(srt_path):
         final_path = os.path.join(output_dir, "final_with_subtitles.mp4")
-        return add_subtitles_to_video(video_path, srt_path, final_path, subtitle_style)
+        add_subtitles_to_video(video_path, srt_path, final_path, subtitle_style)
     else:
         final_path = os.path.join(output_dir, "final.mp4")
-        # Just re-encode for consistent output
         subprocess.run(
             [
                 "ffmpeg", "-i", video_path,
@@ -280,7 +304,24 @@ def create_final_video(video_path: str, output_dir: str, srt_path: str = None, i
             capture_output=True,
             check=True,
         )
-        return final_path
+
+    # Strip all metadata from final output (no source info leaking)
+    clean_path = os.path.join(output_dir, "final_clean.mp4")
+    subprocess.run(
+        [
+            "ffmpeg", "-i", final_path,
+            "-map_metadata", "-1",
+            "-fflags", "+bitexact",
+            "-flags:v", "+bitexact", "-flags:a", "+bitexact",
+            "-c", "copy",
+            clean_path, "-y"
+        ],
+        capture_output=True,
+        check=True,
+    )
+    os.replace(clean_path, final_path)
+
+    return final_path
 
 
 def _get_remaining_duration(video_path: str, start_time: float) -> float:

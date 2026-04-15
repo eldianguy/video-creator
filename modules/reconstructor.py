@@ -8,6 +8,39 @@ import subprocess
 import json
 
 
+def _run_ffmpeg(cmd: list, error_context: str = "FFmpeg") -> subprocess.CompletedProcess:
+    """Run an FFmpeg/FFprobe command with proper error handling."""
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return result
+    except subprocess.CalledProcessError as e:
+        stderr = e.stderr or ""
+        # Extract the last meaningful error line from FFmpeg output
+        error_lines = [l for l in stderr.strip().split("\n") if l.strip()]
+        detail = error_lines[-1] if error_lines else "Unknown error"
+        raise RuntimeError(f"{error_context}: {detail}") from None
+
+
+def _has_audio_stream(video_path: str) -> bool:
+    """Check if a video file contains an audio stream."""
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "quiet",
+            "-print_format", "json",
+            "-show_streams",
+            "-select_streams", "a",
+            video_path,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    try:
+        info = json.loads(result.stdout)
+        return len(info.get("streams", [])) > 0
+    except (json.JSONDecodeError, KeyError):
+        return False
+
+
 def _get_video_resolution(video_path: str) -> tuple:
     """Get width and height of a video."""
     result = subprocess.run(
@@ -62,7 +95,8 @@ def _build_scale_filter(target_w: int, target_h: int, fill: bool = False) -> str
 
 
 def _normalize_clip(input_path: str, output_path: str, width: int, height: int,
-                    target_duration: float = None, fill: bool = False) -> str:
+                    target_duration: float = None, fill: bool = False,
+                    preset: str = "fast") -> str:
     """
     Re-encode a clip to match the target resolution, framerate, and codec.
     If target_duration is set and clip is shorter, the last frame is frozen.
@@ -81,7 +115,7 @@ def _normalize_clip(input_path: str, output_path: str, width: int, height: int,
             "ffmpeg", "-i", input_path,
             "-vf", vf,
             "-t", str(target_duration),
-            "-c:v", "libx264", "-an",
+            "-c:v", "libx264", "-preset", preset, "-an",
             "-r", "30", "-pix_fmt", "yuv420p",
             output_path, "-y"
         ]
@@ -91,12 +125,12 @@ def _normalize_clip(input_path: str, output_path: str, width: int, height: int,
             cmd += ["-t", str(target_duration)]
         cmd += [
             "-vf", scale_filter,
-            "-c:v", "libx264", "-an",
+            "-c:v", "libx264", "-preset", preset, "-an",
             "-r", "30", "-pix_fmt", "yuv420p",
             output_path, "-y"
         ]
 
-    subprocess.run(cmd, capture_output=True, check=True)
+    _run_ffmpeg(cmd, error_context="Clip normalization failed")
     return output_path
 
 
@@ -113,7 +147,8 @@ EXPORT_PRESETS = {
 
 def reconstruct_with_custom_clips(video_path: str, scenes: list, output_dir: str,
                                   custom_clips: dict = None, export_preset: str = "original",
-                                  crop_filter: str = "", keep_original_audio: bool = True) -> str:
+                                  crop_filter: str = "", keep_original_audio: bool = True,
+                                  encoding_speed: str = "fast") -> str:
     """
     Reconstruct a video, replacing specific scenes with user-uploaded custom clips.
 
@@ -169,6 +204,7 @@ def reconstruct_with_custom_clips(video_path: str, scenes: list, output_dir: str
                 target_w, target_h,
                 target_duration=seg["duration"],
                 fill=fill_mode,
+                preset=encoding_speed,
             )
         else:
             # Cut from original video (video-only)
@@ -179,16 +215,17 @@ def reconstruct_with_custom_clips(video_path: str, scenes: list, output_dir: str
             vf = ",".join(vf_parts)
 
             cmd = [
-                "ffmpeg", "-ss", str(seg["start"]),
+                "ffmpeg", "-accurate_seek",
+                "-ss", str(seg["start"]),
                 "-i", video_path,
                 "-t", str(seg["duration"]),
                 "-vf", vf,
-                "-c:v", "libx264", "-an",
+                "-c:v", "libx264", "-preset", encoding_speed, "-an",
                 "-r", "30", "-pix_fmt", "yuv420p",
                 "-avoid_negative_ts", "make_zero",
                 clip_path, "-y"
             ]
-            subprocess.run(cmd, capture_output=True, check=True)
+            _run_ffmpeg(cmd, error_context=f"Scene {scene_idx} extraction failed")
 
         temp_clips.append(clip_path)
 
@@ -199,49 +236,53 @@ def reconstruct_with_custom_clips(video_path: str, scenes: list, output_dir: str
 
     # Concatenate all video clips (video-only)
     video_only_path = os.path.join(output_dir, "reconstructed_video_only.mp4")
-    subprocess.run(
+    _run_ffmpeg(
         [
             "ffmpeg", "-f", "concat", "-safe", "0",
             "-i", concat_file,
             "-c", "copy",
             video_only_path, "-y"
         ],
-        capture_output=True,
-        check=True,
+        error_context="Video concatenation failed",
     )
 
-    if keep_original_audio:
+    if keep_original_audio and _has_audio_stream(video_path):
         # Extract original audio track to a separate file first
         audio_path = os.path.join(output_dir, "original_audio.aac")
-        subprocess.run(
+        _run_ffmpeg(
             [
                 "ffmpeg", "-i", video_path,
                 "-vn", "-c:a", "aac", "-b:a", "192k",
                 audio_path, "-y"
             ],
-            capture_output=True,
-            check=True,
+            error_context="Audio extraction failed",
         )
 
-        # Merge: use video duration, loop/pad audio if needed
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-i", video_only_path,
-                "-i", audio_path,
-                "-c:v", "copy",
-                "-c:a", "aac",
-                "-map", "0:v:0",
-                "-map", "1:a:0",
-                output_path, "-y"
-            ],
-            capture_output=True,
-            check=True,
-        )
+        # Get actual durations to ensure sync
+        video_dur = _get_clip_duration(video_only_path)
+        audio_dur = _get_clip_duration(audio_path)
+
+        # Trim audio to match video duration for perfect beat sync
+        merge_cmd = [
+            "ffmpeg",
+            "-i", video_only_path,
+            "-i", audio_path,
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+        ]
+        if abs(video_dur - audio_dur) > 0.1:
+            # Audio and video differ: trim to the shorter one
+            merge_cmd += ["-t", str(min(video_dur, audio_dur))]
+        merge_cmd += [output_path, "-y"]
+
+        _run_ffmpeg(merge_cmd, error_context="Audio/video merge failed")
 
         if os.path.exists(audio_path):
             os.remove(audio_path)
     else:
+        # No audio track or user doesn't want original audio
         os.rename(video_only_path, output_path)
         video_only_path = None
 
@@ -268,7 +309,7 @@ def add_subtitles_to_video(video_path: str, srt_path: str, output_path: str, sty
     subtitle_style = style_map.get(style, style_map["default"])
     escaped_srt = srt_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
 
-    subprocess.run(
+    _run_ffmpeg(
         [
             "ffmpeg", "-i", video_path,
             "-vf", f"subtitles='{escaped_srt}':force_style='{subtitle_style}'",
@@ -277,8 +318,7 @@ def add_subtitles_to_video(video_path: str, srt_path: str, output_path: str, sty
             "-preset", "fast",
             output_path, "-y"
         ],
-        capture_output=True,
-        check=True,
+        error_context="Subtitle burn-in failed",
     )
     return output_path
 
@@ -294,20 +334,19 @@ def create_final_video(video_path: str, output_dir: str, srt_path: str = None,
         add_subtitles_to_video(video_path, srt_path, final_path, subtitle_style)
     else:
         final_path = os.path.join(output_dir, "final.mp4")
-        subprocess.run(
+        _run_ffmpeg(
             [
                 "ffmpeg", "-i", video_path,
                 "-c:v", "libx264", "-c:a", "aac",
                 "-preset", "fast",
                 final_path, "-y"
             ],
-            capture_output=True,
-            check=True,
+            error_context="Final video encoding failed",
         )
 
     # Strip all metadata from final output (no source info leaking)
     clean_path = os.path.join(output_dir, "final_clean.mp4")
-    subprocess.run(
+    _run_ffmpeg(
         [
             "ffmpeg", "-i", final_path,
             "-map_metadata", "-1",
@@ -316,8 +355,7 @@ def create_final_video(video_path: str, output_dir: str, srt_path: str = None,
             "-c", "copy",
             clean_path, "-y"
         ],
-        capture_output=True,
-        check=True,
+        error_context="Metadata stripping failed",
     )
     os.replace(clean_path, final_path)
 

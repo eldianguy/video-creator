@@ -8,19 +8,51 @@ import subprocess
 import whisper
 
 
-def extract_audio(video_path: str, output_dir: str) -> str:
-    """Extract audio track from video file."""
-    audio_path = os.path.join(output_dir, "audio.wav")
-    subprocess.run(
+def _has_audio_stream(video_path: str) -> bool:
+    """Check if a video file contains an audio stream."""
+    import json
+    result = subprocess.run(
         [
-            "ffmpeg", "-i", video_path,
-            "-vn", "-acodec", "pcm_s16le",
-            "-ar", "16000", "-ac", "1",
-            audio_path, "-y"
+            "ffprobe", "-v", "quiet",
+            "-print_format", "json",
+            "-show_streams",
+            "-select_streams", "a",
+            video_path,
         ],
         capture_output=True,
-        check=True,
+        text=True,
     )
+    try:
+        info = json.loads(result.stdout)
+        return len(info.get("streams", [])) > 0
+    except Exception:
+        return False
+
+
+def extract_audio(video_path: str, output_dir: str) -> str:
+    """Extract audio track from video file."""
+    if not _has_audio_stream(video_path):
+        raise RuntimeError(
+            "Das Video enthält keine Audiospur. "
+            "Transkription nicht möglich – bitte überspringe diesen Schritt."
+        )
+
+    audio_path = os.path.join(output_dir, "audio.wav")
+    try:
+        subprocess.run(
+            [
+                "ffmpeg", "-i", video_path,
+                "-vn", "-acodec", "pcm_s16le",
+                "-ar", "16000", "-ac", "1",
+                audio_path, "-y"
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        detail = (e.stderr or "").strip().split("\n")[-1] if e.stderr else "Unknown error"
+        raise RuntimeError(f"Audio-Extraktion fehlgeschlagen: {detail}") from None
     return audio_path
 
 

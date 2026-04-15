@@ -320,7 +320,7 @@ async function extractScenes() {
             card.innerHTML = `
                 <div class="scene-check" onclick="toggleScene(this.parentElement, ${scene.scene_index})">✓</div>
                 <div class="scene-media" onclick="toggleScene(this.parentElement, ${scene.scene_index})">
-                    <img src="${scene.image_url}" alt="Szene ${scene.scene_index}" loading="lazy" id="scene-img-${scene.scene_index}">
+                    <img src="${scene.image_url}" data-original-src="${scene.image_url}" alt="Szene ${scene.scene_index}" loading="lazy" id="scene-img-${scene.scene_index}">
                 </div>
                 <div class="scene-info">
                     <div class="scene-time">⏱ ${formatTimestamp(scene.timestamp)}</div>
@@ -394,6 +394,7 @@ async function reconstructVideo() {
     const subtitleStyle = document.getElementById('subtitle-style').value;
     const exportPreset = document.getElementById('export-preset').value;
     const keepOriginalAudio = document.getElementById('keep-original-audio').checked;
+    const encodingSpeed = document.getElementById('encoding-speed').value;
 
     showStatus('reconstruct-status', 'Video wird rekonstruiert... Das kann bei längeren Videos etwas dauern.', 'loading');
     document.getElementById('download-section').classList.add('hidden');
@@ -406,6 +407,7 @@ async function reconstructVideo() {
             selected_scenes: Array.from(selectedScenes),
             export_preset: exportPreset,
             keep_original_audio: keepOriginalAudio,
+            encoding_speed: encodingSpeed,
         });
 
         showStatus('reconstruct-status', 'Video erfolgreich erstellt!', 'success');
@@ -466,8 +468,11 @@ async function uploadBulkClips(input) {
             }
         });
 
-        showStatus('extract-status',
-            `${result.total_assigned} von ${input.files.length} Clips erfolgreich zugeordnet!`, 'success');
+        let statusMsg = `${result.total_assigned} von ${input.files.length} Clips erfolgreich zugeordnet!`;
+        if (input.files.length > result.total_assigned) {
+            statusMsg += ` (${input.files.length - result.total_assigned} Clips wurden ignoriert — mehr Dateien als Szenen)`;
+        }
+        showStatus('extract-status', statusMsg, 'success');
     } catch (err) {
         showStatus('extract-status', err.message, 'error');
     }
@@ -545,15 +550,11 @@ async function removeCustomClip(sceneIndex) {
     const revertBtn = document.getElementById(`btn-revert-${sceneIndex}`);
     const img = document.getElementById(`scene-img-${sceneIndex}`);
 
-    // Restore original scene image
-    const originalUrl = img.dataset.originalSrc || img.src;
-    // We need to find the original URL — stored as data attribute
+    // Restore original scene image from stored data attribute
     card.classList.remove('has-custom-clip');
     badge.classList.add('hidden');
     revertBtn.classList.add('hidden');
-
-    // Reload original image by rebuilding src
-    img.src = `/api/scene-image/${projectId}/scene_${String(sceneIndex).padStart(4, '0')}.jpg`;
+    img.src = img.dataset.originalSrc;
 }
 
 // --- Allow Enter key in URL input ---

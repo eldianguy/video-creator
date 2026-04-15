@@ -4,6 +4,7 @@ A web tool that analyzes, transcribes, and reconstructs videos from YouTube/TikT
 """
 
 import os
+import re
 import shutil
 import uuid
 import json
@@ -215,6 +216,10 @@ def api_scene_image(project_id, filename):
     if project_id not in projects:
         return jsonify({"error": "Projekt nicht gefunden."}), 404
 
+    # Validate filename to prevent path traversal
+    if not re.match(r'^scene_\d{4}\.jpg$', filename):
+        return jsonify({"error": "Ungültiger Dateiname."}), 400
+
     scenes_dir = os.path.join(projects[project_id]["dir"], "scenes")
     return send_from_directory(scenes_dir, filename)
 
@@ -385,6 +390,12 @@ def api_reconstruct():
     selected_scenes = data.get("selected_scenes", None)
     export_preset = data.get("export_preset", "original")
     keep_original_audio = data.get("keep_original_audio", True)
+    encoding_speed = data.get("encoding_speed", "fast")
+
+    # Validate encoding speed preset
+    valid_speeds = {"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow"}
+    if encoding_speed not in valid_speeds:
+        encoding_speed = "fast"
 
     if project_id not in projects:
         return jsonify({"error": "Projekt nicht gefunden."}), 404
@@ -410,6 +421,7 @@ def api_reconstruct():
             export_preset=export_preset,
             crop_filter=crop_filter,
             keep_original_audio=keep_original_audio,
+            encoding_speed=encoding_speed,
         )
 
         # Create final video (with optional subtitles)

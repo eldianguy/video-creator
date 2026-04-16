@@ -6,8 +6,11 @@ A web tool that analyzes, transcribes, and reconstructs videos from YouTube/TikT
 import os
 import re
 import shutil
+import subprocess
+import time
 import uuid
 import json
+from threading import Thread
 from flask import Flask, render_template, request, jsonify, send_file, send_from_directory
 
 from modules.downloader import download_video
@@ -22,9 +25,51 @@ WORKSPACE = os.path.join(os.path.dirname(__file__), "workspace")
 os.makedirs(WORKSPACE, exist_ok=True)
 
 ALLOWED_VIDEO_EXT = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
+PROJECT_TTL = 24 * 3600  # 24 hours
 
 # Store active projects in memory
 projects = {}
+
+
+def _validate_video_file(video_path: str) -> bool:
+    """Check if a file is a valid video with a video stream."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "quiet",
+                "-print_format", "json",
+                "-show_streams",
+                "-select_streams", "v:0",
+                video_path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        info = json.loads(result.stdout)
+        return len(info.get("streams", [])) > 0
+    except Exception:
+        return False
+
+
+def _cleanup_expired_projects():
+    """Background thread: remove projects older than PROJECT_TTL."""
+    while True:
+        time.sleep(3600)  # Check every hour
+        now = time.time()
+        expired = [
+            pid for pid, proj in list(projects.items())
+            if now - proj.get("created_at", 0) > PROJECT_TTL
+        ]
+        for pid in expired:
+            project_dir = projects[pid].get("dir", "")
+            if project_dir and os.path.exists(project_dir):
+                shutil.rmtree(project_dir, ignore_errors=True)
+            projects.pop(pid, None)
+
+
+_cleanup_thread = Thread(target=_cleanup_expired_projects, daemon=True)
+_cleanup_thread.start()
 
 
 @app.route("/")
@@ -53,6 +98,7 @@ def api_download():
             "title": result["title"],
             "duration": result["duration"],
             "url": url,
+            "created_at": time.time(),
         }
         return jsonify({
             "project_id": project_id,
@@ -88,7 +134,6 @@ def api_upload_local():
 
     # Get video duration via ffprobe
     try:
-        import subprocess
         result = subprocess.run(
             ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", video_path],
             capture_output=True, text=True,
@@ -105,6 +150,7 @@ def api_upload_local():
         "title": title,
         "duration": duration,
         "url": f"local://{file.filename}",
+        "created_at": time.time(),
     }
 
     return jsonify({
@@ -248,6 +294,11 @@ def api_upload_clip(project_id, scene_index):
     clip_path = os.path.join(custom_dir, f"custom_{scene_index}{ext}")
     file.save(clip_path)
 
+    # Validate that the file is a real video with a video stream
+    if not _validate_video_file(clip_path):
+        os.remove(clip_path)
+        return jsonify({"error": "Datei ist keine gültige Videodatei oder hat keinen Video-Stream."}), 400
+
     # Store the custom clip mapping
     if "custom_clips" not in project:
         project["custom_clips"] = {}
@@ -295,7 +346,6 @@ def api_custom_clip_preview(project_id, scene_index):
     thumb_path = clip_path + ".thumb.jpg"
 
     if not os.path.exists(thumb_path):
-        import subprocess
         subprocess.run(
             [
                 "ffmpeg", "-i", clip_path,
@@ -361,7 +411,6 @@ def api_upload_bulk_clips(project_id):
 
         # Generate thumbnail
         thumb_path = clip_path + ".thumb.jpg"
-        import subprocess
         subprocess.run(
             ["ffmpeg", "-i", clip_path, "-vframes", "1", "-q:v", "2", thumb_path, "-y"],
             capture_output=True,

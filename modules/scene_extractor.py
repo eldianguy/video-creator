@@ -7,6 +7,8 @@ import os
 import subprocess
 import json
 
+MAX_SCENES = 500
+
 
 def get_video_duration(video_path: str) -> float:
     """Get the duration of a video in seconds."""
@@ -20,8 +22,11 @@ def get_video_duration(video_path: str) -> float:
         capture_output=True,
         text=True,
     )
-    info = json.loads(result.stdout)
-    return float(info["format"]["duration"])
+    try:
+        info = json.loads(result.stdout)
+        return float(info["format"]["duration"])
+    except (json.JSONDecodeError, KeyError, ValueError) as e:
+        raise RuntimeError(f"Video-Dauer konnte nicht ermittelt werden: {e}") from None
 
 
 def auto_crop_detect(video_path: str) -> str:
@@ -38,6 +43,7 @@ def auto_crop_detect(video_path: str) -> str:
         ],
         capture_output=True,
         text=True,
+        timeout=120,
     )
 
     # Parse the last cropdetect line (most stable after a few seconds)
@@ -80,9 +86,17 @@ def extract_scenes(video_path: str, output_dir: str, method: str = "interval",
         crop_filter = auto_crop_detect(video_path)
 
     if method == "scene_detect":
-        return _extract_by_scene_detection(video_path, scenes_dir, threshold, crop_filter, min_scene_duration)
+        scenes = _extract_by_scene_detection(video_path, scenes_dir, threshold, crop_filter, min_scene_duration)
     else:
-        return _extract_by_interval(video_path, scenes_dir, interval, crop_filter)
+        scenes = _extract_by_interval(video_path, scenes_dir, interval, crop_filter)
+
+    if len(scenes) > MAX_SCENES:
+        raise RuntimeError(
+            f"Zu viele Szenen erkannt ({len(scenes)}). Maximum: {MAX_SCENES}. "
+            "Erhöhe das Intervall oder senke die Empfindlichkeit."
+        )
+
+    return scenes
 
 
 def _extract_by_interval(video_path: str, scenes_dir: str, interval: float, crop_filter: str = "") -> list:
@@ -95,16 +109,24 @@ def _extract_by_interval(video_path: str, scenes_dir: str, interval: float, crop
     if crop_filter:
         vf = f"crop={crop_filter},{vf}"
 
-    subprocess.run(
-        [
-            "ffmpeg", "-i", video_path,
-            "-vf", vf,
-            "-q:v", "2",
-            output_pattern, "-y"
-        ],
-        capture_output=True,
-        check=True,
-    )
+    try:
+        subprocess.run(
+            [
+                "ffmpeg", "-i", video_path,
+                "-vf", vf,
+                "-q:v", "2",
+                output_pattern, "-y"
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=600,
+        )
+    except subprocess.CalledProcessError as e:
+        detail = (e.stderr or "").strip().split("\n")[-1] if e.stderr else "Unknown error"
+        raise RuntimeError(f"Szenen-Extraktion fehlgeschlagen: {detail}") from None
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Szenen-Extraktion abgebrochen: Zeitlimit überschritten (10 Min.)") from None
 
     scenes = []
     idx = 1
@@ -132,16 +154,20 @@ def _extract_by_scene_detection(video_path: str, scenes_dir: str, threshold: flo
     if crop_filter:
         select_expr = f"crop={crop_filter},{select_expr}"
 
-    result = subprocess.run(
-        [
-            "ffmpeg", "-i", video_path,
-            "-vf", select_expr,
-            "-vsync", "vfr",
-            "-f", "null", "-"
-        ],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg", "-i", video_path,
+                "-vf", select_expr,
+                "-vsync", "vfr",
+                "-f", "null", "-"
+            ],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Szenenwechsel-Erkennung abgebrochen: Zeitlimit überschritten (10 Min.)") from None
 
     # Extract timestamps from showinfo output
     raw_timestamps = [0.0]  # Always include the first frame
@@ -178,7 +204,10 @@ def _extract_by_scene_detection(video_path: str, scenes_dir: str, threshold: flo
             "-q:v", "2",
         ] + crop_vf + [filepath, "-y"]
 
-        subprocess.run(cmd, capture_output=True)
+        try:
+            subprocess.run(cmd, capture_output=True, check=True, timeout=30)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            continue  # Skip individual frame failures, extract what we can
 
         if os.path.exists(filepath):
             scenes.append({

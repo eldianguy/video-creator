@@ -8,11 +8,13 @@ import subprocess
 import json
 
 
-def _run_ffmpeg(cmd: list, error_context: str = "FFmpeg") -> subprocess.CompletedProcess:
-    """Run an FFmpeg/FFprobe command with proper error handling."""
+def _run_ffmpeg(cmd: list, error_context: str = "FFmpeg", timeout: int = 600) -> subprocess.CompletedProcess:
+    """Run an FFmpeg/FFprobe command with proper error handling and timeout."""
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=timeout)
         return result
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"{error_context}: Zeitlimit überschritten ({timeout}s)") from None
     except subprocess.CalledProcessError as e:
         stderr = e.stderr or ""
         # Extract the last meaningful error line from FFmpeg output
@@ -54,9 +56,12 @@ def _get_video_resolution(video_path: str) -> tuple:
         capture_output=True,
         text=True,
     )
-    info = json.loads(result.stdout)
-    stream = info["streams"][0]
-    return int(stream["width"]), int(stream["height"])
+    try:
+        info = json.loads(result.stdout)
+        stream = info["streams"][0]
+        return int(stream["width"]), int(stream["height"])
+    except (json.JSONDecodeError, KeyError, IndexError, ValueError) as e:
+        raise RuntimeError(f"Video-Auflösung nicht erkennbar: {e}") from None
 
 
 def _get_clip_duration(video_path: str) -> float:
@@ -71,8 +76,11 @@ def _get_clip_duration(video_path: str) -> float:
         capture_output=True,
         text=True,
     )
-    info = json.loads(result.stdout)
-    return float(info["format"]["duration"])
+    try:
+        info = json.loads(result.stdout)
+        return float(info["format"]["duration"])
+    except (json.JSONDecodeError, KeyError, ValueError) as e:
+        raise RuntimeError(f"Video-Dauer nicht erkennbar: {e}") from None
 
 
 def _build_scale_filter(target_w: int, target_h: int, fill: bool = False) -> str:
@@ -374,6 +382,9 @@ def _get_remaining_duration(video_path: str, start_time: float) -> float:
         capture_output=True,
         text=True,
     )
-    info = json.loads(result.stdout)
-    total = float(info["format"]["duration"])
+    try:
+        info = json.loads(result.stdout)
+        total = float(info["format"]["duration"])
+    except (json.JSONDecodeError, KeyError, ValueError):
+        total = start_time + 2.0  # Fallback: assume 2 seconds remaining
     return max(total - start_time, 0.5)

@@ -230,6 +230,13 @@ function skipTranscription() {
     setStepActive(3);
     showSection('step-3');
     showStatus('transcribe-status', 'Transkription übersprungen.', 'success');
+
+    // Disable subtitle option since no transcript is available
+    const subtitleCheckbox = document.getElementById('include-subtitles');
+    subtitleCheckbox.checked = false;
+    subtitleCheckbox.disabled = true;
+    subtitleCheckbox.parentElement.title = 'Nicht verfügbar — Transkription wurde übersprungen';
+    subtitleCheckbox.parentElement.style.opacity = '0.4';
 }
 
 function downloadSRT() {

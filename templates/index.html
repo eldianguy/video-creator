@@ -123,6 +123,7 @@
                 <div class="scenes-header">
                     <h3>Extrahierte Szenen: <span id="scene-count"></span></h3>
                     <div class="scenes-header-actions">
+                        <span id="replacement-counter" class="replacement-counter">0 / 0 Szenen ersetzt</span>
                         <button class="btn-small" onclick="selectAllScenes()">Alle auswählen</button>
                         <button class="btn-small" onclick="deselectAllScenes()">Alle abwählen</button>
                         <label class="btn-small btn-bulk-upload" title="Mehrere eigene Clips auf einmal hochladen (werden der Reihe nach den Szenen zugeordnet)">
@@ -132,6 +133,8 @@
                         </label>
                     </div>
                 </div>
+                <div id="duration-stats" class="duration-stats hidden"></div>
+                <p class="dnd-hint">💡 Tipp: Du kannst auch mehrere Video-Dateien direkt auf das Szenen-Raster ziehen.</p>
                 <div id="scenes-container"></div>
             </div>
         </section>

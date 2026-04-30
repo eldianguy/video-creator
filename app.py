@@ -52,6 +52,21 @@ def _validate_video_file(video_path: str) -> bool:
         return False
 
 
+def _probe_duration(video_path: str) -> float:
+    """Get video duration in seconds, or 0.0 on failure."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", video_path],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        info = json.loads(result.stdout)
+        return float(info["format"].get("duration", 0))
+    except Exception:
+        return 0.0
+
+
 def _cleanup_expired_projects():
     """Background thread: remove projects older than PROJECT_TTL."""
     while True:
@@ -243,6 +258,7 @@ def api_extract_scenes():
             scene_data.append({
                 "filename": s["filename"],
                 "timestamp": s["timestamp"],
+                "duration": s.get("duration", 0),
                 "scene_index": s["scene_index"],
                 "transcript": s.get("transcript", ""),
                 "image_url": f"/api/scene-image/{project_id}/{s['filename']}",
@@ -268,6 +284,48 @@ def api_scene_image(project_id, filename):
 
     scenes_dir = os.path.join(projects[project_id]["dir"], "scenes")
     return send_from_directory(scenes_dir, filename)
+
+
+@app.route("/api/scene-preview/<project_id>/<int:scene_index>")
+def api_scene_preview(project_id, scene_index):
+    """Generate and serve a short video preview clip for a scene."""
+    if project_id not in projects:
+        return jsonify({"error": "Projekt nicht gefunden."}), 404
+
+    project = projects[project_id]
+    scenes = project.get("scenes", [])
+    scene = next((s for s in scenes if s["scene_index"] == scene_index), None)
+    if not scene:
+        return jsonify({"error": "Szene nicht gefunden."}), 404
+
+    preview_dir = os.path.join(project["dir"], "scene_previews")
+    os.makedirs(preview_dir, exist_ok=True)
+    preview_path = os.path.join(preview_dir, f"preview_{scene_index}.mp4")
+
+    if not os.path.exists(preview_path):
+        start = scene["timestamp"]
+        duration = min(scene.get("duration", 2.0), 6.0)  # Cap at 6s for fast loading
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg", "-accurate_seek",
+                    "-ss", str(start),
+                    "-i", project["video_path"],
+                    "-t", str(duration),
+                    "-vf", "scale=480:-2",
+                    "-c:v", "libx264", "-preset", "ultrafast",
+                    "-c:a", "aac", "-b:a", "96k",
+                    "-movflags", "+faststart",
+                    preview_path, "-y"
+                ],
+                capture_output=True,
+                check=True,
+                timeout=30,
+            )
+        except Exception:
+            return jsonify({"error": "Vorschau konnte nicht erstellt werden."}), 500
+
+    return send_file(preview_path, mimetype="video/mp4")
 
 
 @app.route("/api/upload-clip/<project_id>/<int:scene_index>", methods=["POST"])
@@ -304,11 +362,21 @@ def api_upload_clip(project_id, scene_index):
         project["custom_clips"] = {}
     project["custom_clips"][scene_index] = clip_path
 
+    # Return duration info so frontend can warn about mismatch
+    clip_duration = _probe_duration(clip_path)
+    scene = next(
+        (s for s in project.get("scenes", []) if s["scene_index"] == scene_index),
+        None,
+    )
+    scene_duration = scene.get("duration", 0) if scene else 0
+
     return jsonify({
         "success": True,
         "scene_index": scene_index,
         "filename": file.filename,
         "preview_url": f"/api/custom-clip-preview/{project_id}/{scene_index}",
+        "clip_duration": round(clip_duration, 2),
+        "scene_duration": round(scene_duration, 2),
     })
 
 
@@ -405,6 +473,7 @@ def api_upload_bulk_clips(project_id):
             continue
 
         scene_idx = target_scenes[i]["scene_index"]
+        scene_duration = target_scenes[i].get("duration", 0)
         clip_path = os.path.join(custom_dir, f"custom_{scene_idx}{ext}")
         file.save(clip_path)
         project["custom_clips"][scene_idx] = clip_path
@@ -416,10 +485,13 @@ def api_upload_bulk_clips(project_id):
             capture_output=True,
         )
 
+        clip_duration = _probe_duration(clip_path)
         assigned.append({
             "scene_index": scene_idx,
             "filename": file.filename,
             "preview_url": f"/api/custom-clip-preview/{project_id}/{scene_idx}",
+            "clip_duration": round(clip_duration, 2),
+            "scene_duration": round(scene_duration, 2),
         })
 
     return jsonify({

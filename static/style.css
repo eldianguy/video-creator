@@ -438,6 +438,182 @@ button:disabled {
     cursor: pointer;
 }
 
+/* Replacement progress counter */
+.replacement-counter {
+    padding: 6px 12px;
+    border-radius: 8px;
+    background: #1e1b4b;
+    border: 1px solid #3730a3;
+    color: #a5b4fc;
+    font-size: 0.85rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.replacement-counter.all-done {
+    background: #052e16;
+    border-color: #166534;
+    color: #86efac;
+}
+
+/* Duration stats summary */
+.duration-stats {
+    margin-bottom: 14px;
+    padding: 10px 14px;
+    background: #0f0f1a;
+    border: 1px solid #2a2a4a;
+    border-radius: 10px;
+    color: #aaa;
+    font-size: 0.85rem;
+}
+
+.duration-stats strong {
+    color: #a5b4fc;
+}
+
+/* Drag and drop hint */
+.dnd-hint {
+    margin: 0 0 14px 0;
+    color: #666;
+    font-size: 0.8rem;
+    font-style: italic;
+}
+
+/* Drag-active state */
+#scenes-grid.drag-active {
+    outline: 3px dashed #6366f1;
+    outline-offset: 8px;
+    background: rgba(99, 102, 241, 0.05);
+    border-radius: 12px;
+}
+
+/* Scene duration badge */
+.scene-duration-badge {
+    position: absolute;
+    bottom: 8px;
+    left: 8px;
+    background: rgba(0, 0, 0, 0.75);
+    color: #fbbf24;
+    font-size: 0.75rem;
+    font-weight: 700;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-family: monospace;
+    z-index: 1;
+    pointer-events: none;
+}
+
+/* "Needs replacement" indicator */
+.scene-card.needs-replacement::after {
+    content: '';
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #ef4444;
+    box-shadow: 0 0 6px rgba(239, 68, 68, 0.6);
+    z-index: 2;
+}
+
+/* Preview button */
+.btn-preview {
+    padding: 5px 10px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border-radius: 6px;
+    background: transparent;
+    border: 1px solid #6366f1;
+    color: #a5b4fc;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-preview:hover {
+    background: rgba(99, 102, 241, 0.15);
+    transform: none;
+    box-shadow: none;
+}
+
+/* Duration warning/ok badges in custom clip badge */
+.dur-warn {
+    display: block;
+    margin-top: 4px;
+    color: #fbbf24;
+    font-weight: 600;
+}
+
+.dur-ok {
+    display: block;
+    margin-top: 4px;
+    color: #86efac;
+    font-weight: 600;
+}
+
+/* Video preview modal */
+.video-modal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.85);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.video-modal.visible {
+    display: flex;
+}
+
+.video-modal-content {
+    background: #1a1a2e;
+    border-radius: 12px;
+    border: 1px solid #2a2a4a;
+    overflow: hidden;
+    max-width: 800px;
+    width: 100%;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.video-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    background: #0f0f1a;
+    border-bottom: 1px solid #2a2a4a;
+    color: #a5b4fc;
+    font-weight: 600;
+}
+
+.video-modal-close {
+    padding: 4px 12px !important;
+    font-size: 1rem !important;
+    background: transparent !important;
+    border: 1px solid #555 !important;
+    color: #ccc !important;
+    border-radius: 6px !important;
+}
+
+.video-modal-close:hover {
+    background: rgba(239, 68, 68, 0.2) !important;
+    border-color: #ef4444 !important;
+    color: #fff !important;
+    transform: none !important;
+    box-shadow: none !important;
+}
+
+.video-modal-content video {
+    width: 100%;
+    max-height: 70vh;
+    background: #000;
+    display: block;
+}
+
 #scenes-container {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));

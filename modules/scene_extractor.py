@@ -96,6 +96,14 @@ def extract_scenes(video_path: str, output_dir: str, method: str = "interval",
             "Erhöhe das Intervall oder senke die Empfindlichkeit."
         )
 
+    # Annotate each scene with its duration (next scene's start - this scene's start)
+    total_duration = get_video_duration(video_path)
+    for i, scene in enumerate(scenes):
+        if i + 1 < len(scenes):
+            scene["duration"] = round(scenes[i + 1]["timestamp"] - scene["timestamp"], 2)
+        else:
+            scene["duration"] = round(max(total_duration - scene["timestamp"], 0.1), 2)
+
     return scenes
 
 
